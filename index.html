@@ -96,6 +96,7 @@ textarea{width:100%;height:150px;font:12px ui-monospace,monospace;border:1px sol
 .arBottom button{min-height:46px}
 .arBottom button.big{padding:12px 22px;font-size:17px}
 .arBottom button:disabled{opacity:.4}
+.walls{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0}
 .arseg{width:100%;justify-content:center;margin-bottom:4px}
 #arCross{position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 1px #0006}
 #arDist{position:absolute;top:50%;left:50%;transform:translate(-50%,22px);background:#000a;padding:3px 9px;border-radius:8px;font-weight:600}
@@ -244,17 +245,107 @@ const ext = f => ((f.name || '').split('.').pop() || '').toLowerCase();
 const isVideoFile = f => (f.type || '').startsWith('video') || ['mp4','mov','webm','m4v','3gp','mkv','avi'].includes(ext(f));
 
 /* ================= Zustand ================= */
-function newOpen(kind, r, side) {
+const rectPts = (x, y, w, d) => [{x, y}, {x:x + w, y}, {x:x + w, y:y + d}, {x, y:y + d}];
+const area2 = P => { let a = 0; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length]; a += p.x*q.y - q.x*p.y; } return a; };
+function syncBox(r) { const xs = r.pts.map(p => p.x), ys = r.pts.map(p => p.y); r.x = Math.min(...xs); r.y = Math.min(...ys); r.w = Math.max(...xs) - r.x; r.d = Math.max(...ys) - r.y; }
+function edge(r, i) {
+  const P = r.pts, n = P.length, A = P[((i % n) + n) % n], B = P[(((i + 1) % n) + n) % n];
+  const L = Math.hypot(B.x - A.x, B.y - A.y) || 1, dx = (B.x - A.x)/L, dy = (B.y - A.y)/L;
+  return {A, B, L, dx, dy, nx:-dy, ny:dx};
+}
+// Polygon parallel versetzen (d > 0 = nach innen), Ecken auf Gehrung
+function offsetPoly(P, d) {
+  const n = P.length, out = [];
+  for (let i = 0; i < n; i++) {
+    const a = P[(i - 1 + n) % n], b = P[i], c = P[(i + 1) % n];
+    const l1 = Math.hypot(b.x - a.x, b.y - a.y) || 1, l2 = Math.hypot(c.x - b.x, c.y - b.y) || 1;
+    const e1 = {x:(b.x - a.x)/l1, y:(b.y - a.y)/l1}, e2 = {x:(c.x - b.x)/l2, y:(c.y - b.y)/l2};
+    const p1 = {x:a.x - e1.y*d, y:a.y + e1.x*d}, p2 = {x:b.x - e2.y*d, y:b.y + e2.x*d};
+    const cr = e1.x*e2.y - e1.y*e2.x;
+    if (Math.abs(cr) < 1e-6) { out.push(p2); continue; }
+    const s = ((p2.x - p1.x)*e2.y - (p2.y - p1.y)*e2.x) / cr;
+    out.push({x:p1.x + e1.x*s, y:p1.y + e1.y*s});
+  }
+  return out;
+}
+const innerPts = r => offsetPoly(r.pts, WALL);
+function pointInPoly(P, x, y) {
+  let ins = false;
+  for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+    const a = P[i], b = P[j];
+    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x)*(y - a.y)/(b.y - a.y) + a.x) ins = !ins;
+  }
+  return ins;
+}
+function labelPoint(r) {
+  const P = r.pts, A = area2(P); let cx = 0, cy = 0;
+  for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length], f = p.x*q.y - q.x*p.y; cx += (p.x + q.x)*f; cy += (p.y + q.y)*f; }
+  cx /= 3*A; cy /= 3*A;
+  if (pointInPoly(P, cx, cy)) return {x:cx, y:cy};
+  let best = null;
+  for (let i = 1; i < 12; i++) for (let j = 1; j < 12; j++) {
+    const x = r.x + r.w*i/12, y = r.y + r.d*j/12; if (!pointInPoly(P, x, y)) continue;
+    let m = Infinity; for (let k = 0; k < P.length; k++) { const e = edge(r, k); const t = clamp((x - e.A.x)*e.dx + (y - e.A.y)*e.dy, 0, e.L); m = Math.min(m, Math.hypot(e.A.x + e.dx*t - x, e.A.y + e.dy*t - y)); }
+    if (!best || m > best.m) best = {x, y, m};
+  }
+  return best || {x:r.x + r.w/2, y:r.y + r.d/2};
+}
+function fixOrientation(r) {
+  if (area2(r.pts) >= 0) return;
+  const n = r.pts.length, Ls = r.pts.map((_, i) => edge(r, i).L);
+  r.pts.reverse();
+  for (const o of r.open) { const L = Ls[o.edge]; o.edge = ((n - 2 - o.edge) % n + n) % n; o.offset = Math.max(0, L - o.offset - o.width); }
+}
+function edgeName(r, i) {
+  const e = edge(r, i), ox = -e.nx, oy = -e.ny;
+  const dir = Math.abs(ox) > Math.abs(oy) ? (ox > 0 ? 'rechts' : 'links') : (oy > 0 ? 'unten' : 'oben');
+  return `Wand ${i + 1} (${dir})`;
+}
+function innerLen(r, i) { const P = innerPts(r), n = P.length; return dist(P[i], P[(i + 1) % n]); }
+function stretchWall(r, i, delta) {
+  const e = edge(r, i);
+  for (const p of r.pts) if ((p.x - e.A.x)*e.dx + (p.y - e.A.y)*e.dy >= e.L - .5) { p.x = Math.round((p.x + e.dx*delta)*10)/10; p.y = Math.round((p.y + e.dy*delta)*10)/10; }
+  syncBox(r);
+}
+function insertVertex(r, i, p) {
+  const e = edge(r, i), u = (p.x - e.A.x)*e.dx + (p.y - e.A.y)*e.dy;
+  r.pts.splice(i + 1, 0, {x:p.x, y:p.y});
+  for (const o of r.open) { if (o.edge > i) o.edge++; else if (o.edge === i && o.offset >= u) { o.edge = i + 1; o.offset -= u; } }
+  syncBox(r);
+}
+function removeVertex(r, i) {
+  const n = r.pts.length; if (n <= 3) return toast('Ein Raum braucht mindestens 3 Ecken');
+  const prev = (i - 1 + n) % n, Lp = edge(r, prev).L;
+  for (const o of r.open) if (o.edge === i) { o.edge = prev; o.offset += Lp; }
+  r.pts.splice(i, 1);
+  for (const o of r.open) if (o.edge > i) o.edge--;
+  syncBox(r);
+}
+function placeRoomPts(r, P) {
+  const xs = P.map(p => p.x), ys = P.map(p => p.y), nw = Math.max(...xs) - Math.min(...xs), nd = Math.max(...ys) - Math.min(...ys);
+  const right = r.x + r.w, bottom = r.y + r.d, dw = nw - r.w, dd = nd - r.d;
+  const moves = S.rooms.filter(q => q !== r).map(q => {
+    let mx = 0, my = 0;
+    if (q.x >= right - 1 && q.y < bottom && q.y + q.d > r.y) mx = dw;
+    if (q.y >= bottom - 1 && q.x < right && q.x + q.w > r.x) my = dd;
+    return {q, mx, my, objs:[...S.items.filter(it => roomAt(it.x, it.y) === q), ...S.media.filter(m => m.pin && pointInPoly(q.pts, m.pin.x, m.pin.y)).map(m => m.pin)]};
+  });
+  for (const {q, mx, my, objs} of moves) if (mx || my) { q.pts.forEach(p => { p.x += mx; p.y += my; }); syncBox(q); objs.forEach(o => { o.x += mx; o.y += my; }); }
+  r.pts = P; syncBox(r);
+}
+function newOpen(kind, r, e) {
   const base = {door:{width:85, height:210, sill:0, style:'glatt'}, open:{width:100, height:215, sill:0, style:'zarge'}, window:{width:120, height:140, sill:90, style:'zweifluegel'}}[kind];
-  side ||= {door:'S', open:'E', window:'N'}[kind];
-  const L = (side === 'N' || side === 'S') ? r.w : r.d;
-  return {id:uid(), kind, side, offset:Math.max(0, snap(L/2 - base.width/2)), shape:'rect', mat:{t:'plain', c:'#ffffff'}, ...base};
+  const n = r.pts.length;
+  e = clamp(e ?? {door:Math.min(2, n - 1), open:1, window:0}[kind], 0, n - 1);
+  const L = edge(r, e).L;
+  return {id:uid(), kind, edge:e, offset:Math.max(0, snap(L/2 - base.width/2)), shape:'rect', mat:{t:'plain', c:'#ffffff'}, ...base};
 }
 function defaults() {
-  const a = {id:uid(), name:'Wohnzimmer', x:0, y:0, w:450, d:380, h:250, floor:{t:'wood',c:'#c09060'}, wall:{t:'plaster',c:'#f4f1eb'}, open:[]};
-  const b = {id:uid(), name:'Schlafzimmer', x:450, y:0, w:350, d:380, h:250, floor:{t:'parquet',c:'#d9b98a'}, wall:{t:'plaster',c:'#dfe5e3'}, open:[]};
-  a.open.push({...newOpen('window', a, 'N'), offset:80, width:140}, {...newOpen('window', a, 'N'), offset:260, width:110, style:'sprossen'}, {...newOpen('door', a, 'E'), offset:150});
-  b.open.push({...newOpen('window', b, 'N'), shape:'arch', offset:115, width:120, height:150});
+  const a = {id:uid(), name:'Wohnzimmer', pts:rectPts(0, 0, 450, 380), h:250, floor:{t:'wood',c:'#c09060'}, wall:{t:'plaster',c:'#f4f1eb'}, open:[]};
+  const b = {id:uid(), name:'Schlafzimmer', pts:rectPts(450, 0, 350, 380), h:250, floor:{t:'parquet',c:'#d9b98a'}, wall:{t:'plaster',c:'#dfe5e3'}, open:[]};
+  syncBox(a); syncBox(b);
+  a.open.push({...newOpen('window', a, 0), offset:80, width:140}, {...newOpen('window', a, 0), offset:260, width:110, style:'sprossen'}, {...newOpen('door', a, 1), offset:150});
+  b.open.push({...newOpen('window', b, 0), shape:'arch', offset:115, width:120, height:150});
   return {rooms:[a, b], items:[], media:[], bg:null};
 }
 function migrate(s) {
@@ -263,6 +354,14 @@ function migrate(s) {
     if (typeof r.floor === 'string') r.floor = {t:'plain', c:r.floor};
     if (typeof r.wall === 'string') r.wall = {t:'plain', c:r.wall};
     if (!r.open) { r.open = (r.doors || []).map(d => ({id:uid(), kind:'door', side:d.side, offset:+d.offset, width:+d.width, height:210, sill:0, shape:'rect', style:'glatt', mat:{t:'plain',c:'#ffffff'}})); delete r.doors; }
+    if (!r.pts) {
+      r.pts = rectPts(r.x, r.y, r.w, r.d);
+      for (const o of r.open) if (o.edge == null) {
+        const idx = {N:0, E:1, S:2, W:3}[o.side] ?? 0, L = idx % 2 ? r.d : r.w;
+        o.edge = idx; if (idx >= 2) o.offset = Math.max(0, L - (+o.offset || 0) - (+o.width || 0)); delete o.side;
+      }
+    }
+    syncBox(r);
     if (r.photos) { for (const p of r.photos) { const id = uid(); DB.put(id, dataURLtoBlob(p.src)); s.media.push({id, room:r.id, type:'img', cap:'', pin:null}); } delete r.photos; }
   }
   for (const it of s.items) if (!it.mat) { it.mat = {t:'plain', c:it.c || '#cccccc'}; delete it.c; }
@@ -278,6 +377,7 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localSto
 
 let S = load(); save();
 let sel = null;           // {t:'room'|'item'|'open'|'pin', id}
+let selVtx = null;        // {room, i}
 let mode = '2d';
 let planMode = null;      // 'pin' | 'calib' | 'bgmove'
 let pinTarget = null, calib = [];
@@ -290,46 +390,43 @@ function find(t, id) {
   if (t === 'pin') return S.media.find(m => m.id === id);
 }
 const roomOfOpen = id => S.rooms.find(r => r.open.some(o => o.id === id));
-const roomAt = (x, y) => S.rooms.find(r => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.d);
+const roomAt = (x, y) => S.rooms.find(r => pointInPoly(r.pts, x, y));
 
 /* ================= Geometrie der Wände ================= */
-function sideInfo(r, s) {
-  const t = WALL;
-  const m = {N:[r.x, r.y + t/2, 1, 0, r.w], S:[r.x, r.y + r.d - t/2, 1, 0, r.w], W:[r.x + t/2, r.y, 0, 1, r.d], E:[r.x + r.w - t/2, r.y, 0, 1, r.d]}[s];
-  return {sx:m[0], sy:m[1], dx:m[2], dy:m[3], L:m[4], nx:s === 'W' ? 1 : s === 'E' ? -1 : 0, ny:s === 'N' ? 1 : s === 'S' ? -1 : 0};
-}
+function sideInfo(r, i) { const e = edge(r, i), t = WALL; return {...e, sx:e.A.x + e.nx*t/2, sy:e.A.y + e.ny*t/2}; }
 // eigene Öffnungen + Durchgänge des Nachbarraums auf derselben Wandlinie
-function sideOps(r, s) {
-  const L = sideInfo(r, s).L, H = r.h, out = [];
-  const norm = (o, shift, mirror) => {
+function sideOps(r, i) {
+  const e = edge(r, i), L = e.L, H = r.h, out = [];
+  const norm = (o, a, w, mirror) => {
     const floor = o.kind !== 'window';
-    let w = Math.min(+o.width || 0, L), a = (+o.offset || 0) + shift;
-    if (mirror) { const a2 = Math.max(0, a), e = Math.min(L, a + w); a = a2; w = e - a2; if (w < 10) return null; }
-    else a = clamp(a, 0, Math.max(0, L - w));
+    if (mirror) { const a2 = Math.max(0, a), en = Math.min(L, a + w); a = a2; w = en - a2; if (w < 10) return null; }
+    else { w = Math.min(w, L); a = clamp(a, 0, Math.max(0, L - w)); }
     const b = floor ? 0 : clamp(+o.sill || 0, 2, H - 12);
     const top = clamp(floor ? (+o.height || 0) : b + (+o.height || 0), b + 10, H - 2);
     return {o, mirror, a, w, b, top, floor, shape:o.shape || 'rect'};
   };
-  for (const o of r.open) if (o.side === s) { const n = norm(o, 0, false); if (n) out.push(n); }
-  const opp = {N:'S', S:'N', E:'W', W:'E'}[s];
+  for (const o of r.open) if (o.edge === i) { const n = norm(o, +o.offset || 0, +o.width || 0, false); if (n) out.push(n); }
   for (const q of S.rooms) {
     if (q === r) continue;
-    let ok, shift;
-    if (s === 'N') { ok = Math.abs(q.y + q.d - r.y) < 1; shift = q.x - r.x; }
-    else if (s === 'S') { ok = Math.abs(q.y - (r.y + r.d)) < 1; shift = q.x - r.x; }
-    else if (s === 'W') { ok = Math.abs(q.x + q.w - r.x) < 1; shift = q.y - r.y; }
-    else { ok = Math.abs(q.x - (r.x + r.w)) < 1; shift = q.y - r.y; }
-    if (!ok) continue;
-    for (const o of q.open) if (o.side === opp && o.kind !== 'window') { const n = norm(o, shift, true); if (n) out.push(n); }
+    for (let j = 0; j < q.pts.length; j++) {
+      const f = edge(q, j);
+      if (e.dx*f.dx + e.dy*f.dy > -.995) continue;
+      if (Math.abs((f.A.x - e.A.x)*e.nx + (f.A.y - e.A.y)*e.ny) > 1.5) continue;
+      for (const o of q.open) if (o.edge === j && o.kind !== 'window') {
+        const pr = u => (f.A.x + f.dx*u - e.A.x)*e.dx + (f.A.y + f.dy*u - e.A.y)*e.dy;
+        const u1 = pr(+o.offset || 0), u2 = pr((+o.offset || 0) + (+o.width || 0));
+        const n = norm(o, Math.min(u1, u2), Math.abs(u2 - u1), true); if (n) out.push(n);
+      }
+    }
   }
   return out;
 }
 function wallSegs(r) {
   const out = [];
-  for (const s of ['N', 'E', 'S', 'W']) {
-    const si = sideInfo(r, s);
-    const seg = (a, b) => ({x1:si.sx + si.dx*a, y1:si.sy + si.dy*a, x2:si.sx + si.dx*b, y2:si.sy + si.dy*b, side:s});
-    const gaps = sideOps(r, s).filter(n => n.floor).map(n => [n.a, n.a + n.w]).sort((a, b) => a[0] - b[0]);
+  for (let i = 0; i < r.pts.length; i++) {
+    const si = sideInfo(r, i);
+    const seg = (a, b) => ({x1:si.sx + si.dx*a, y1:si.sy + si.dy*a, x2:si.sx + si.dx*b, y2:si.sy + si.dy*b, edge:i});
+    const gaps = sideOps(r, i).filter(n => n.floor).map(n => [n.a, n.a + n.w]).sort((a, b) => a[0] - b[0]);
     let p = 0;
     for (const [a, b] of gaps) { if (a > p) out.push(seg(p, a)); p = Math.max(p, b); }
     if (p < si.L) out.push(seg(p, si.L));
@@ -345,34 +442,38 @@ function bounds() {
 const fmtM = cm => (cm / 100).toFixed(2).replace('.', ',');
 
 /* Möbel in Räumen halten + an Wände einrasten */
-function halfExt(it) {
-  const a = it.rot * Math.PI / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
-  return {hw:(it.w*c + it.d*s)/2, hd:(it.w*s + it.d*c)/2};
+function itemCorners(it) {
+  const a = it.rot * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => ({x:it.x + (u*it.w/2)*c - (v*it.d/2)*s, y:it.y + (u*it.w/2)*s + (v*it.d/2)*c}));
+}
+function innerEdges(r) {
+  const P = innerPts(r), n = P.length;
+  return P.map((A, i) => { const B = P[(i + 1) % n], L = Math.hypot(B.x - A.x, B.y - A.y) || 1, dx = (B.x - A.x)/L, dy = (B.y - A.y)/L; return {A, L, dx, dy, nx:-dy, ny:dx}; });
 }
 function fitInRoom(it, r, magnet) {
   if (!r) return null;
-  const {hw, hd} = halfExt(it), t = WALL;
-  const x0 = r.x + t + hw, x1 = r.x + r.w - t - hw, y0 = r.y + t + hd, y1 = r.y + r.d - t - hd;
-  it.x = x0 > x1 ? r.x + r.w/2 : clamp(it.x, x0, x1);
-  it.y = y0 > y1 ? r.y + r.d/2 : clamp(it.y, y0, y1);
-  let hit = null;
-  if (magnet) {
-    const M = 14;
-    if (it.x - x0 < M && x0 <= x1) { it.x = x0; hit = 'W'; }
-    if (x1 - it.x < M && x0 <= x1) { it.x = x1; hit = 'E'; }
-    if (it.y - y0 < M && y0 <= y1) { it.y = y0; hit = 'N'; }
-    if (y1 - it.y < M && y0 <= y1) { it.y = y1; hit = 'S'; }
+  const E = innerEdges(r);
+  const dists = () => E.map(e => { let m = Infinity; for (const C of itemCorners(it)) { const t = (C.x - e.A.x)*e.dx + (C.y - e.A.y)*e.dy; if (t < -2 || t > e.L + 2) continue; m = Math.min(m, (C.x - e.A.x)*e.nx + (C.y - e.A.y)*e.ny); } return m; });
+  for (let k = 0; k < 8; k++) {
+    let moved = false;
+    dists().forEach((m, i) => { if (m < -.01 && m > -400) { it.x -= E[i].nx*m; it.y -= E[i].ny*m; moved = true; } });
+    if (!moved) break;
   }
+  let hit = null;
+  if (magnet) dists().map((m, i) => [m, i]).filter(([m]) => m >= 0 && m < 14).sort((a, b) => a[0] - b[0]).slice(0, 2).forEach(([m, i]) => { it.x -= E[i].nx*m; it.y -= E[i].ny*m; hit = i; });
   return hit;
 }
 function toWall(it) {
   const r = roomAt(it.x, it.y); if (!r) return toast('Stell das Möbel zuerst in einen Raum');
-  const t = WALL, d = {N:it.y - (r.y + t), S:(r.y + r.d - t) - it.y, W:it.x - (r.x + t), E:(r.x + r.w - t) - it.x};
-  const s = Object.keys(d).reduce((a, b) => d[a] < d[b] ? a : b);
-  it.rot = {N:0, E:90, S:180, W:270}[s];
-  const {hw, hd} = halfExt(it);
-  if (s === 'N') it.y = r.y + t + hd; if (s === 'S') it.y = r.y + r.d - t - hd;
-  if (s === 'W') it.x = r.x + t + hw; if (s === 'E') it.x = r.x + r.w - t - hw;
+  let best = null;
+  for (const e of innerEdges(r)) {
+    const t = (it.x - e.A.x)*e.dx + (it.y - e.A.y)*e.dy; if (t < 0 || t > e.L) continue;
+    const s = (it.x - e.A.x)*e.nx + (it.y - e.A.y)*e.ny; if (s >= 0 && (!best || s < best.s)) best = {...e, s};
+  }
+  if (!best) return toast('Keine passende Wand gefunden');
+  it.rot = ((Math.round(Math.atan2(-best.nx, best.ny)*180/Math.PI) % 360) + 360) % 360;
+  const m = Math.min(...itemCorners(it).map(C => (C.x - best.A.x)*best.nx + (C.y - best.A.y)*best.ny));
+  it.x -= best.nx*m; it.y -= best.ny*m;
   fitInRoom(it, r, false);
 }
 
@@ -491,18 +592,17 @@ function renderPlan() {
   for (let gy = Math.floor(vy/50)*50; gy < vy + vh; gy += 50) h += `<line x1="${vx}" y1="${gy}" x2="${vx + vw}" y2="${gy}" stroke="#00000010" stroke-width="${px}"/>`;
   if (S.bg && bgURL) h += `<image href="${bgURL}" x="${S.bg.x}" y="${S.bg.y}" width="${S.bg.w}" height="${S.bg.w * S.bg.ratio}" opacity="${S.bg.op}" preserveAspectRatio="none" ${planMode === 'bgmove' ? '' : 'pointer-events="none"'}/>`;
   const ghost = S.bg && bgURL ? .55 : 1;
+  const ptsStr = P => P.map(p => `${p.x},${p.y}`).join(' ');
   for (const rm of S.rooms) {
     const on = sel && sel.id === rm.id;
-    h += `<rect data-t="room" data-id="${rm.id}" x="${rm.x}" y="${rm.y}" width="${rm.w}" height="${rm.d}" fill="${fillFor(rm.floor)}" fill-opacity="${ghost}" stroke="${on ? 'var(--sel)' : 'none'}" stroke-width="${3*px}"/>`;
+    h += `<polygon data-t="room" data-id="${rm.id}" points="${ptsStr(rm.pts)}" fill="${fillFor(rm.floor)}" fill-opacity="${ghost}" stroke="${on ? 'var(--sel)' : 'none'}" stroke-width="${3*px}"/>`;
   }
-  for (const rm of S.rooms) {
-    for (const s of wallSegs(rm)) h += `<line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="#3f3f3f" stroke-width="${WALL}" stroke-linecap="square" pointer-events="none"/>`;
-  }
+  for (const rm of S.rooms) for (const s of wallSegs(rm)) h += `<line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="#3f3f3f" stroke-width="${WALL}" stroke-linecap="square" pointer-events="none"/>`;
   for (const rm of S.rooms) h += openings2D(rm, px);
   for (const rm of S.rooms) {
-    const area = (rm.w * rm.d / 10000).toFixed(1).replace('.', ',');
-    h += `<text x="${rm.x + rm.w/2}" y="${rm.y + 24 + fs}" text-anchor="middle" font-size="${fs*1.15}" font-weight="700" fill="#222" paint-order="stroke" stroke="#ffffffb0" stroke-width="${3*px}">${esc(rm.name)}</text>
-      <text x="${rm.x + rm.w/2}" y="${rm.y + 24 + fs*2.4}" text-anchor="middle" font-size="${fs*.95}" fill="#333" paint-order="stroke" stroke="#ffffffb0" stroke-width="${3*px}">${fmtM(rm.w)} × ${fmtM(rm.d)} m · ${area} m²</text>`;
+    const lp = labelPoint(rm), area = (Math.abs(area2(innerPts(rm)))/2/10000).toFixed(1).replace('.', ',');
+    h += `<text x="${lp.x}" y="${lp.y - fs*.3}" text-anchor="middle" font-size="${fs*1.15}" font-weight="700" fill="#222" paint-order="stroke" stroke="#ffffffb0" stroke-width="${3*px}">${esc(rm.name)}</text>
+      <text x="${lp.x}" y="${lp.y + fs*1.1}" text-anchor="middle" font-size="${fs*.95}" fill="#333" paint-order="stroke" stroke="#ffffffb0" stroke-width="${3*px}">${area} m²</text>`;
   }
   const items = [...S.items].sort((a, b) => (b.k === 'rug') - (a.k === 'rug'));
   for (const it of items) {
@@ -519,6 +619,25 @@ function renderPlan() {
       <text x="${x}" y="${y + 4*px}" text-anchor="middle" font-size="${10*px}" fill="#fff">${m.type === 'vid' ? '▶' : '◉'}</text></g>`;
   }
   if (sel && sel.t === 'item') h += distLines(find('item', sel.id), px, fs);
+  // Wandlängen + Ecken-Griffe des gewählten Raums
+  const sr = sel && (sel.t === 'room' ? find('room', sel.id) : sel.t === 'open' ? roomOfOpen(sel.id) : null);
+  if (sr && !planMode) {
+    const P = innerPts(sr), n = P.length;
+    for (let i = 0; i < n; i++) {
+      const A = P[i], B = P[(i + 1) % n], e = edge(sr, i), mx = (A.x + B.x)/2 + e.nx*16*px, my = (A.y + B.y)/2 + e.ny*16*px;
+      h += `<text x="${mx}" y="${my + fs*.35}" text-anchor="middle" font-size="${fs*.85}" font-weight="600" fill="#7a3e12" paint-order="stroke" stroke="#fff" stroke-width="${3*px}">${i + 1}: ${fmtM(dist(A, B))}</text>`;
+    }
+    if (sel.t === 'room') {
+      sr.pts.forEach((p, i) => {
+        const q = sr.pts[(i + 1) % n];
+        h += `<g data-t="mid" data-id="${sr.id}" data-i="${i}"><circle cx="${(p.x + q.x)/2}" cy="${(p.y + q.y)/2}" r="${8*px}" fill="#fff" stroke="var(--sel)" stroke-width="${1.5*px}"/><text x="${(p.x + q.x)/2}" y="${(p.y + q.y)/2 + 4*px}" text-anchor="middle" font-size="${12*px}" fill="var(--sel)">+</text></g>`;
+      });
+      sr.pts.forEach((p, i) => {
+        const on = selVtx && selVtx.room === sr.id && selVtx.i === i;
+        h += `<g data-t="vtx" data-id="${sr.id}" data-i="${i}"><circle cx="${p.x}" cy="${p.y}" r="${11*px}" fill="${on ? 'var(--sel)' : '#fff'}" stroke="var(--sel)" stroke-width="${2*px}"/><text x="${p.x}" y="${p.y + 4*px}" text-anchor="middle" font-size="${10*px}" font-weight="700" fill="${on ? '#fff' : 'var(--sel)'}">${i + 1}</text></g>`;
+      });
+    }
+  }
   if (planMode === 'calib') {
     for (const p of calib) h += `<circle cx="${p.x}" cy="${p.y}" r="${7*px}" fill="var(--sel)" stroke="#fff" stroke-width="${2*px}"/>`;
     if (calib.length === 2) h += `<line x1="${calib[0].x}" y1="${calib[0].y}" x2="${calib[1].x}" y2="${calib[1].y}" stroke="var(--sel)" stroke-width="${2*px}"/>`;
@@ -527,9 +646,9 @@ function renderPlan() {
 }
 function openings2D(rm, px) {
   let h = '';
-  for (const s of ['N', 'E', 'S', 'W']) {
-    const si = sideInfo(rm, s), P = u => ({x:si.sx + si.dx*u, y:si.sy + si.dy*u});
-    for (const n of sideOps(rm, s)) {
+  for (let i = 0; i < rm.pts.length; i++) {
+    const si = sideInfo(rm, i), P = u => ({x:si.sx + si.dx*u, y:si.sy + si.dy*u});
+    for (const n of sideOps(rm, i)) {
       if (n.mirror) continue;
       const o = n.o, on = sel && sel.id === o.id, A = P(n.a), B = P(n.a + n.w), col = on ? 'var(--sel)' : '#333';
       const t2 = WALL/2, nx = si.nx, ny = si.ny;
@@ -540,8 +659,7 @@ function openings2D(rm, px) {
       } else if (o.kind === 'door') {
         const inA = {x:A.x + nx*t2, y:A.y + ny*t2}, inB = {x:B.x + nx*t2, y:B.y + ny*t2};
         const arc = (hinge, close, w) => {
-          const le = {x:hinge.x + nx*w, y:hinge.y + ny*w};
-          const d = {x:close.x - hinge.x, y:close.y - hinge.y};
+          const le = {x:hinge.x + nx*w, y:hinge.y + ny*w}, d = {x:close.x - hinge.x, y:close.y - hinge.y};
           const sw = (nx*d.y - ny*d.x) > 0 ? 1 : 0;
           return `<path d="M${hinge.x} ${hinge.y}L${le.x} ${le.y}A${w} ${w} 0 0 ${sw} ${close.x} ${close.y}" fill="none" stroke="${col}" stroke-width="${1.3*px}" pointer-events="none"/>`;
         };
@@ -564,16 +682,21 @@ function openings2D(rm, px) {
 function distLines(it, px, fs) {
   if (!it) return '';
   const rm = roomAt(it.x, it.y); if (!rm) return '';
-  const {hw, hd} = halfExt(it), t = WALL;
-  const L = [[rm.x + t, it.y, it.x - hw, it.y], [it.x + hw, it.y, rm.x + rm.w - t, it.y], [it.x, rm.y + t, it.x, it.y - hd], [it.x, it.y + hd, it.x, rm.y + rm.d - t]];
+  const C = itemCorners(it), res = [];
+  for (const e of innerEdges(rm)) {
+    let best = null;
+    for (const c of C) { const t = (c.x - e.A.x)*e.dx + (c.y - e.A.y)*e.dy; if (t < 0 || t > e.L) continue; const s = (c.x - e.A.x)*e.nx + (c.y - e.A.y)*e.ny; if (s >= -.5 && (!best || s < best.s)) best = {s, c}; }
+    if (best) res.push({...best, nx:e.nx, ny:e.ny});
+  }
+  res.sort((a, b) => a.s - b.s);
   let h = '';
-  for (const [a, b, c, d] of L) {
-    const len = Math.round(Math.hypot(c - a, d - b));
-    if (c < a - .5 || d < b - .5) continue;
+  for (const {s, c, nx, ny} of res.slice(0, 4)) {
+    if (s > 600) continue;
+    const a = c.x, b = c.y, x2 = c.x - nx*s, y2 = c.y - ny*s, len = Math.round(s);
     if (len < 1) { h += `<circle cx="${a}" cy="${b}" r="${4*px}" fill="var(--sel)"/>`; continue; }
-    h += `<line x1="${a}" y1="${b}" x2="${c}" y2="${d}" stroke="var(--sel)" stroke-width="${1.5*px}" stroke-dasharray="${5*px} ${3*px}"/>
-      <rect x="${(a+c)/2 - fs*1.6}" y="${(b+d)/2 - fs*.75}" width="${fs*3.2}" height="${fs*1.5}" rx="${fs*.4}" fill="#fff" stroke="var(--sel)" stroke-width="${px}"/>
-      <text x="${(a+c)/2}" y="${(b+d)/2 + fs*.35}" text-anchor="middle" font-size="${fs*.9}" fill="var(--sel)" font-weight="600">${len}</text>`;
+    h += `<line x1="${a}" y1="${b}" x2="${x2}" y2="${y2}" stroke="var(--sel)" stroke-width="${1.5*px}" stroke-dasharray="${5*px} ${3*px}"/>
+      <rect x="${(a + x2)/2 - fs*1.6}" y="${(b + y2)/2 - fs*.75}" width="${fs*3.2}" height="${fs*1.5}" rx="${fs*.4}" fill="#fff" stroke="var(--sel)" stroke-width="${px}"/>
+      <text x="${(a + x2)/2}" y="${(b + y2)/2 + fs*.35}" text-anchor="middle" font-size="${fs*.9}" fill="var(--sel)" font-weight="600">${len}</text>`;
   }
   return h;
 }
@@ -593,14 +716,19 @@ svg.addEventListener('pointerdown', e => {
   if (planMode === 'bgmove' && S.bg) { drag = {bg:true, sx:e.clientX, sy:e.clientY, bx:S.bg.x, by:S.bg.y}; return; }
   const el = planMode ? null : e.target.closest('[data-id]');
   if (el) {
-    const t = el.dataset.t, o = find(t, el.dataset.id);
-    sel = {t, id:el.dataset.id};
+    const t = el.dataset.t;
+    if (t === 'vtx' || t === 'mid') {
+      const r = find('room', el.dataset.id); let i = +el.dataset.i;
+      if (t === 'mid') { insertVertex(r, i, {x:snap(p.x), y:snap(p.y)}); i++; }
+      drag = {vtx:true, room:r, i, moved:t === 'mid'}; sel = {t:'room', id:r.id}; renderPlan(); return;
+    }
+    const o = find(t, el.dataset.id);
+    sel = {t, id:el.dataset.id}; if (t !== 'room') selVtx = null;
     if (t === 'open') drag = {open:o, room:roomOfOpen(o.id), moved:false};
     else if (t === 'pin') drag = {o:o.pin, media:o, dx:p.x - o.pin.x, dy:p.y - o.pin.y, moved:false};
-    else {
-      drag = {o, t, dx:p.x - o.x, dy:p.y - o.y, moved:false, room:t === 'item' ? roomAt(o.x, o.y) : null};
-      if (t === 'room') drag.kids = [...S.items.filter(it => it.x > o.x && it.x < o.x + o.w && it.y > o.y && it.y < o.y + o.d), ...S.media.filter(m => m.pin && m.pin.x > o.x && m.pin.x < o.x + o.w && m.pin.y > o.y && m.pin.y < o.y + o.d).map(m => m.pin)];
-    }
+    else if (t === 'room') drag = {roomDrag:true, o, ox:o.pts[0].x, oy:o.pts[0].y, px:p.x, py:p.y, moved:false,
+      kids:[...S.items.filter(it => roomAt(it.x, it.y) === o), ...S.media.filter(m => m.pin && pointInPoly(o.pts, m.pin.x, m.pin.y)).map(m => m.pin)]};
+    else drag = {o, t, dx:p.x - o.x, dy:p.y - o.y, moved:false, room:roomAt(o.x, o.y)};
     renderPlan(); if (t !== 'pin') renderProps();
   } else drag = {pan:true, sx:e.clientX, sy:e.clientY, cx:V.cx, cy:V.cy, moved:false, p0:p};
 });
@@ -624,26 +752,35 @@ svg.addEventListener('pointermove', e => {
     if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true;
     V.cx = drag.cx - dx/V.s; V.cy = drag.cy - dy/V.s; renderPlan(); return;
   }
+  if (drag.vtx) {
+    const r = drag.room, P = r.pts, n = P.length; let x = snap(p.x), y = snap(p.y);
+    const tol = 12/V.s;
+    for (const j of [(drag.i - 1 + n) % n, (drag.i + 1) % n]) { if (Math.abs(x - P[j].x) < tol) x = P[j].x; if (Math.abs(y - P[j].y) < tol) y = P[j].y; }
+    if (x !== P[drag.i].x || y !== P[drag.i].y) { P[drag.i] = {x, y}; syncBox(r); drag.moved = true; renderPlan(); }
+    return;
+  }
   if (drag.open) {
-    const r = drag.room, o = drag.open;
-    const d = {N:Math.abs(p.y - r.y), S:Math.abs(p.y - (r.y + r.d)), W:Math.abs(p.x - r.x), E:Math.abs(p.x - (r.x + r.w))};
-    const s = Object.keys(d).reduce((a, b) => d[a] < d[b] ? a : b);
-    const L = (s === 'N' || s === 'S') ? r.w : r.d;
-    const u = clamp(snap(((s === 'N' || s === 'S') ? p.x - r.x : p.y - r.y) - o.width/2), 0, Math.max(0, L - o.width));
-    if (u !== o.offset || s !== o.side) { o.offset = u; o.side = s; drag.moved = true; renderPlan(); }
+    const r = drag.room, o = drag.open; let best = null;
+    for (let i = 0; i < r.pts.length; i++) {
+      const ed = edge(r, i), t = clamp((p.x - ed.A.x)*ed.dx + (p.y - ed.A.y)*ed.dy, 0, ed.L);
+      const d = Math.hypot(ed.A.x + ed.dx*t - p.x, ed.A.y + ed.dy*t - p.y);
+      if (!best || d < best.d) best = {d, i, t, L:ed.L};
+    }
+    const u = clamp(snap(best.t - o.width/2), 0, Math.max(0, best.L - o.width));
+    if (u !== o.offset || best.i !== o.edge) { o.offset = u; o.edge = best.i; drag.moved = true; renderPlan(); }
     return;
   }
   if (drag.media) { drag.o.x = Math.round(p.x - drag.dx); drag.o.y = Math.round(p.y - drag.dy); drag.moved = true; renderPlan(); return; }
+  if (drag.roomDrag) {
+    const o = drag.o, nx = snap(drag.ox + p.x - drag.px), ny = snap(drag.oy + p.y - drag.py), dx = nx - o.pts[0].x, dy = ny - o.pts[0].y;
+    if (dx || dy) { o.pts.forEach(q => { q.x += dx; q.y += dy; }); syncBox(o); drag.kids.forEach(k => { k.x += dx; k.y += dy; }); drag.moved = true; renderPlan(); }
+    return;
+  }
   const o = drag.o, ox = o.x, oy = o.y;
   o.x = snap(p.x - drag.dx); o.y = snap(p.y - drag.dy);
-  if (drag.t === 'item') {
-    const r = roomAt(p.x, p.y) || drag.room;
-    if (r) { drag.room = r; const hit = fitInRoom(o, r, true); if (hit && hit !== drag.hit) navigator.vibrate?.(8); drag.hit = hit; }
-  }
-  if (o.x !== ox || o.y !== oy) {
-    if (drag.kids) drag.kids.forEach(k => { k.x += o.x - ox; k.y += o.y - oy; });
-    drag.moved = true; renderPlan();
-  }
+  const r = roomAt(p.x, p.y) || drag.room;
+  if (r) { drag.room = r; const hit = fitInRoom(o, r, true); if (hit != null && hit !== drag.hit) navigator.vibrate?.(8); drag.hit = hit; }
+  if (o.x !== ox || o.y !== oy) { drag.moved = true; renderPlan(); }
 });
 const endPtr = e => {
   ptrs.delete(e.pointerId);
@@ -651,9 +788,15 @@ const endPtr = e => {
   if (!drag || ptrs.size) { if (!ptrs.size) drag = null; return; }
   if (drag.pinDraft) { planMode = null; hideBanner(); save(); const m = pinTarget; pinTarget = null; toast('Standort gespeichert'); renderPlan(); setTimeout(() => openViewerFor(m), 250); }
   else if (drag.bg) save();
+  else if (drag.vtx) {
+    const r = drag.room;
+    if (!drag.moved) selVtx = selVtx && selVtx.room === r.id && selVtx.i === drag.i ? null : {room:r.id, i:drag.i};
+    else { selVtx = null; fixOrientation(r); S.items.filter(it => roomAt(it.x, it.y) === r).forEach(it => fitInRoom(it, r, false)); save(); }
+    renderPlan(); renderProps();
+  }
   else if (drag.pan && !drag.moved) {
     if (planMode === 'calib') { calib.push(drag.p0); renderPlan(); if (calib.length === 2) askCalib(); }
-    else if (!planMode) { sel = null; renderPlan(); renderProps(); }
+    else if (!planMode) { sel = null; selVtx = null; renderPlan(); renderProps(); }
   }
   else if (drag.media && !drag.moved) openViewerFor(drag.media);
   else if (!drag.pan && drag.moved) { save(); renderProps(); }
@@ -684,12 +827,18 @@ function renderProps() {
   const o = sel && find(sel.t, sel.id);
   if (!o || sel.t === 'pin') { sel = null; P.innerHTML = `<p class="hint">Tippe einen Raum, ein Fenster, eine Tür oder ein Möbelstück an. Ziehen verschiebt – Möbel rasten an Wänden ein, Fenster und Türen gleiten an der Wand entlang. Zwei Finger zoomen.</p>`; return; }
   if (sel.t === 'room') {
+    const n = o.pts.length, area = (Math.abs(area2(innerPts(o)))/2/10000).toFixed(1).replace('.', ',');
+    const vs = selVtx && selVtx.room === o.id ? selVtx : null;
     P.innerHTML = `<input class="name" data-k="name" value="${esc(o.name)}">
-      <div class="g3">${num('w', 'Breite (cm)', o.w)}${num('d', 'Länge (cm)', o.d)}${num('h', 'Höhe (cm)', o.h)}</div>
+      <div class="g2">${num('h', 'Raumhöhe (cm)', o.h)}<p class="hint" style="align-self:end">${n} Ecken · ${area} m² Fläche</p></div>
+      <div class="sub">Wände – Innenmaß in cm</div>
+      <div class="walls">${o.pts.map((_, i) => `<label>Wand ${i + 1}<input type="number" inputmode="decimal" data-wall="${i}" value="${Math.round(innerLen(o, i))}"></label>`).join('')}</div>
+      ${vs ? `<div class="bar" style="margin-top:8px"><b style="flex:1">Ecke ${vs.i + 1} ausgewählt</b><button class="danger" data-act="delVtx">Ecke löschen</button></div>` : ''}
+      <p class="hint">Ecken im Plan ziehen (rasten gerade zur Nachbarecke ein). „+“ auf einer Wand fügt eine Ecke ein, Ecke antippen zum Löschen. Wandlänge ändern verschiebt alles hinter dem Wandende.</p>
       ${matPicker('floor', o.floor, 'Boden')}
       ${matPicker('wall', o.wall, 'Wände')}
       <div class="sub">Fenster, Türen & Durchgänge</div>
-      <div class="oplist">${o.open.map(op => `<button data-act="selOpen" data-id="${op.id}"><span>${KINDS_OPEN[op.kind]} · ${SIDES[op.side]}</span><small>${op.width} × ${op.height} cm ›</small></button>`).join('') || '<p class="hint">Noch keine.</p>'}</div>
+      <div class="oplist">${o.open.map(op => `<button data-act="selOpen" data-id="${op.id}"><span>${KINDS_OPEN[op.kind]} · Wand ${op.edge + 1}</span><small>${op.width} × ${op.height} cm ›</small></button>`).join('') || '<p class="hint">Noch keine.</p>'}</div>
       <div class="actions"><button data-act="addOpen" data-k="window">＋ Fenster</button><button data-act="addOpen" data-k="door">＋ Tür</button><button data-act="addOpen" data-k="open">＋ Durchgang</button></div>
       <p class="hint">Türen und Durchgänge an einer gemeinsamen Wand öffnen automatisch auch den Nachbarraum.</p>
       <button class="pri magic" data-act="arStart">📐 Mit Kamera vermessen</button>
@@ -698,11 +847,12 @@ function renderProps() {
   } else if (sel.t === 'open') {
     const r = roomOfOpen(o.id), isW = o.kind === 'window';
     const shapes = isW ? SHAPES : {rect:SHAPES.rect, arch:SHAPES.arch};
+    const edges = Object.fromEntries(r.pts.map((_, i) => [String(i), edgeName(r, i)]));
     P.innerHTML = `<div class="bar"><button data-act="selRoom" data-id="${r.id}">← ${esc(r.name)}</button></div>
-      <div class="g2"><label>Art<select data-k="kind">${opts(KINDS_OPEN, o.kind)}</select></label><label>Wand<select data-k="side">${opts(SIDES, o.side)}</select></label></div>
+      <div class="g2"><label>Art<select data-k="kind">${opts(KINDS_OPEN, o.kind)}</select></label><label>Wand<select data-k="edge">${opts(edges, String(o.edge))}</select></label></div>
       <div class="g2"><label>Form<select data-k="shape">${opts(shapes, o.shape)}</select></label><label>Stil<select data-k="style">${opts(STYLES[o.kind], o.style)}</select></label></div>
       <div class="${isW ? 'g4' : 'g3'}">${num('offset', 'Abstand', o.offset)}${num('width', 'Breite', o.width)}${num('height', 'Höhe', o.height)}${isW ? num('sill', 'Brüstung', o.sill) : ''}</div>
-      <p class="hint">Alle Maße in cm. Abstand = von der Raumecke ${o.side === 'N' || o.side === 'S' ? 'links' : 'oben'}.${isW ? ' Brüstung = Höhe der Unterkante über dem Boden.' : ''}</p>
+      <p class="hint">Alle Maße in cm. Abstand = ab Ecke ${o.edge + 1} entlang der Wand.${isW ? ' Brüstung = Höhe der Unterkante über dem Boden.' : ''}</p>
       ${o.kind === 'open' && o.style === 'ohne' ? '' : matPicker('mat', o.mat, isW ? 'Rahmen' : o.kind === 'door' ? 'Türblatt & Zarge' : 'Zarge')}
       <div class="actions"><button data-act="delOpen" class="danger">Löschen</button></div>`;
   } else {
@@ -721,25 +871,36 @@ function renderProps() {
 function changed(rebuildProps) { renderPlan(); if (mode !== '2d') build3D(); save(); if (rebuildProps) renderProps(); }
 $('#props').addEventListener('input', e => {
   const o = sel && find(sel.t, sel.id); if (!o) return;
-  const el = e.target, isNum = el.type === 'number', val = isNum ? (parseFloat(el.value) || 0) : el.value;
+  const el = e.target; if (el.dataset.wall != null) return;
+  const isNum = el.type === 'number'; let val = isNum ? (parseFloat(el.value) || 0) : el.value;
   let reprops = false;
   if (el.dataset.k) {
     const k = el.dataset.k;
+    if (k === 'edge') val = +val;
     if (sel.t === 'open' && k === 'kind' && val !== o.kind) {
-      const d = newOpen(val, roomOfOpen(o.id), o.side);
+      const d = newOpen(val, roomOfOpen(o.id), o.edge);
       Object.assign(o, {kind:val, height:d.height, sill:d.sill, style:d.style, width:d.width});
       if (val !== 'window' && o.shape === 'round') o.shape = 'arch';
       reprops = true;
     } else o[k] = val;
     if (el.tagName === 'SELECT') reprops = true;
     if (sel.t === 'item' && ['w', 'd', 'h', 'k'].includes(k)) fitInRoom(o, roomAt(o.x, o.y), false);
-    if (sel.t === 'room' && ['w', 'd'].includes(k)) S.items.forEach(it => { const r = roomAt(it.x, it.y); if (r === o) fitInRoom(it, o, false); });
   } else if (el.dataset.m) {
     const [p, f] = el.dataset.m.split('.');
     o[p][f] = val;
     if (f === 't') { o[p].c = (PRESETS[val] || PRESETS.plain)[0]; reprops = true; }
   } else return;
-  changed(reprops && e.type === 'input' && el.tagName === 'SELECT');
+  changed(reprops && el.tagName === 'SELECT');
+});
+$('#props').addEventListener('change', e => {
+  const el = e.target; if (el.dataset.wall == null) return;
+  const r = sel && sel.t === 'room' && find('room', sel.id); if (!r) return;
+  const i = +el.dataset.wall, v = parseFloat(el.value);
+  if (!(v > 10)) return renderProps();
+  const kids = S.items.filter(it => roomAt(it.x, it.y) === r);
+  stretchWall(r, i, v - innerLen(r, i));
+  kids.forEach(it => fitInRoom(it, r, false));
+  changed(true);
 });
 
 /* ================= Aktionen ================= */
@@ -749,8 +910,8 @@ document.addEventListener('click', e => {
   switch (act) {
     case 'close': closeModal(); break;
     case 'addRoom': {
-      const B = bounds(), r = {id:uid(), name:'Neuer Raum', x:S.rooms.length ? snap(B.x + B.w) : 0, y:S.rooms.length ? B.y : 0, w:300, d:300, h:250, floor:{t:'wood', c:'#c09060'}, wall:{t:'plaster', c:'#f4f1eb'}, open:[]};
-      S.rooms.push(r); sel = {t:'room', id:r.id}; fit(); changed(true); toast('Raum hinzugefügt – Maße unten eintragen'); break;
+      const B = bounds(), r = {id:uid(), name:'Neuer Raum', pts:rectPts(S.rooms.length ? snap(B.x + B.w) : 0, S.rooms.length ? B.y : 0, 300, 300), h:250, floor:{t:'wood', c:'#c09060'}, wall:{t:'plaster', c:'#f4f1eb'}, open:[]};
+      syncBox(r); S.rooms.push(r); sel = {t:'room', id:r.id}; fit(); changed(true); toast('Raum hinzugefügt – Maße unten eintragen'); break;
     }
     case 'catalog': openCatalog(); break;
     case 'addCat': { const c = CAT[+b.dataset.i]; addItem({...c, mat:{...c.m}}); closeModal(); break; }
@@ -794,8 +955,9 @@ document.addEventListener('click', e => {
     case 'reconStop': reconCtl?.abort(); break;
     case 'reconUndo': if (reconUndo) { S = JSON.parse(reconUndo); reconUndo = null; sel = null; save(); closeModal(); fit(); changed(true); toast('Rückgängig gemacht'); } break;
     case 'to3d': closeModal(); setMode('3d'); break;
+    case 'delVtx': if (o && selVtx && sel.t === 'room') { const kids = S.items.filter(it => roomAt(it.x, it.y) === o); removeVertex(o, selVtx.i); selVtx = null; fixOrientation(o); kids.forEach(it => fitInRoom(it, o, false)); changed(true); } break;
     case 'arStart': if (sel && sel.t === 'room') startAR(sel.id); else startAR(null); break;
-    case 'arUndo': case 'arAdd': case 'arNext': case 'arKind': case 'arFinish': case 'arCancel': arAct(act, b); break;
+    case 'arUndo': case 'arAdd': case 'arNext': case 'arMethod': case 'arKind': case 'arFinish': case 'arCancel': arAct(act, b); break;
     case 'arApply': arApply(); break;
     case 'arRetry': closeModal(); startAR(arResult?.rid); break;
     case 'vtMode': case 'vtReset': case 'vtUndo': case 'vtPreset': case 'pipTo': vtAct(act, b); break;
@@ -808,7 +970,7 @@ document.addEventListener('click', e => {
 function addItem(c) {
   const it = {id:uid(), n:c.n, w:c.w, d:c.d, h:c.h, mat:c.mat, k:c.k || 'box', link:c.link || '', rot:0, e:0, x:0, y:0};
   const r = (sel && sel.t === 'room' && find('room', sel.id)) || roomAt(V.cx, V.cy) || S.rooms[0];
-  if (r) { it.x = snap(r.x + r.w/2); it.y = snap(r.y + r.d/2); fitInRoom(it, r, false); } else { it.x = snap(V.cx); it.y = snap(V.cy); }
+  if (r) { const lp = labelPoint(r); it.x = snap(lp.x); it.y = snap(lp.y); fitInRoom(it, r, false); } else { it.x = snap(V.cx); it.y = snap(V.cy); }
   S.items.push(it); sel = {t:'item', id:it.id}; changed(true); toast(`${it.n} platziert`);
 }
 
@@ -1063,26 +1225,18 @@ function applyRecon(r, j, replaceItems) {
   const mat = (m, def) => ({t:MATS[m?.t] ? m.t : def.t, c:hex(m?.c) || def.c});
   if (replaceItems) S.items = S.items.filter(it => roomAt(it.x, it.y) !== r);
   const kids = S.items.filter(it => roomAt(it.x, it.y) === r);
-  const ow = r.w, od = r.d, right = r.x + r.w, bottom = r.y + r.d;
-  const inRoom = (q, x, y) => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.d;
-  const others = S.rooms.filter(q => q !== r).map(q => ({q, its:S.items.filter(it => inRoom(q, it.x, it.y)), pins:S.media.filter(m => m.pin && inRoom(q, m.pin.x, m.pin.y)).map(m => m.pin)}));
-  r.w = snap(num(j.w, 400, 120, 3000) + 2*T); r.d = snap(num(j.d, 350, 120, 3000) + 2*T); r.h = Math.round(num(j.h, 250, 180, 600));
-  const dw = r.w - ow, dd = r.d - od;
-  for (const {q, its, pins} of others) {
-    let mx = 0, my = 0;
-    if (q.x >= right - 1 && q.y < bottom && q.y + q.d > r.y) mx = dw;
-    if (q.y >= bottom - 1 && q.x < right && q.x + q.w > r.x) my = dd;
-    if (mx || my) { q.x += mx; q.y += my; [...its, ...pins].forEach(o => { o.x += mx; o.y += my; }); }
-  }
+  const W = snap(num(j.w, 400, 120, 3000) + 2*T), D = snap(num(j.d, 350, 120, 3000) + 2*T);
+  placeRoomPts(r, rectPts(r.x, r.y, W, D));
+  r.h = Math.round(num(j.h, 250, 180, 600));
   if ((/^Neuer Raum/.test(r.name) || !r.name) && j.name) r.name = String(j.name).slice(0, 40);
   r.floor = mat(j.floor, r.floor); r.wall = mat(j.wall, r.wall);
   const stats = {win:0, door:0, items:0};
   r.open = (Array.isArray(j.openings) ? j.openings : []).slice(0, 24).map(o => {
-    const kind = KINDS_OPEN[o?.kind] ? o.kind : 'window';
-    const d = newOpen(kind, r, SIDES[o?.side] ? o.side : undefined);
-    const L = (d.side === 'N' || d.side === 'S') ? r.w : r.d;
+    const kind = KINDS_OPEN[o?.kind] ? o.kind : 'window', idx = {N:0, E:1, S:2, W:3}[o?.side] ?? 0;
+    const d = newOpen(kind, r, idx), L = edge(r, idx).L;
     d.width = Math.round(num(o.width, d.width, 30, Math.max(30, L - 2*T)));
-    d.offset = Math.round(clamp(num(o.offset, 0, 0, L) + T, T, Math.max(T, L - T - d.width)));
+    let off = num(o.offset, 0, 0, L) + T; if (idx >= 2) off = L - off - d.width;
+    d.offset = Math.round(clamp(off, T, Math.max(T, L - T - d.width)));
     d.height = Math.round(num(o.height, d.height, 40, r.h - 2));
     if (kind === 'window') d.sill = Math.round(num(o.sill, d.sill, 2, Math.max(2, r.h - d.height - 5)));
     d.shape = SHAPES[o.shape] && (kind === 'window' || o.shape !== 'round') ? o.shape : 'rect';
@@ -1100,7 +1254,6 @@ function applyRecon(r, j, replaceItems) {
   kids.forEach(it => fitInRoom(it, r, false));
   return stats;
 }
-
 /* ================= AR-Vermessung (WebXR, läuft komplett auf dem Handy) ================= */
 let arOK = false, ar = null, arResult = null;
 const inFrame = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
@@ -1108,8 +1261,8 @@ const inFrame = (() => { try { return window.top !== window.self; } catch (e) { 
 function arUnsupported() {
   openModal('📐 Mit Kamera vermessen', inFrame
     ? `<p class="hint">Die Kamera-Vermessung ist in dieser eingebetteten Ansicht gesperrt. Öffne die App über deine eigene Webadresse (z. B. Vercel) in Chrome auf dem Handy.</p>`
-    : `<p class="hint">Dieses Gerät oder dieser Browser unterstützt keine AR-Vermessung. Nötig sind <b>Chrome auf Android</b> und die App <b>„Google Play-Dienste für AR“</b> (im Play Store suchen – wird sie nicht angeboten, unterstützt dein Handy kein ARCore). iPhones können das im Browser derzeit nicht.</p>
-       <p class="hint">Alternative: Maße mit dem Zollstock nehmen und im Raum-Panel eintragen, oder im Foto mit „📏 Messen“ abschätzen.</p>`);
+    : `<p class="hint">Dieses Gerät oder dieser Browser unterstützt keine AR-Vermessung. Nötig sind <b>Chrome auf Android</b> und die App <b>„Google Play-Dienste für AR“</b>. iPhones können das im Browser derzeit nicht.</p>
+       <p class="hint">Alternative: Wandlängen mit dem Zollstock messen und im Raum-Panel eintragen, oder im Foto mit „📏 Messen“ abschätzen.</p>`);
 }
 async function startAR(rid) {
   if (!arOK) return arUnsupported();
@@ -1122,55 +1275,87 @@ async function startAR(rid) {
   ren.domElement.style.display = 'none'; document.body.appendChild(ren.domElement);
   const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera();
   const reticle = new THREE.Mesh(new THREE.RingGeometry(.045, .065, 32).rotateX(-Math.PI/2), new THREE.MeshBasicMaterial({color:0xffffff}));
-  reticle.matrixAutoUpdate = false; reticle.visible = false; scene.add(reticle);
+  reticle.visible = false; scene.add(reticle);
   const marks = new THREE.Group(); scene.add(marks);
   const live = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({color:0xffd166}));
   live.visible = false; scene.add(live);
-  ar = {session, ren, scene, reticle, marks, live, cur:null, corners:[], ops:[], pending:null, kind:'window', phase:'corners', floorY:null, done:false, rid, hadHit:false};
+  ar = {session, ren, scene, reticle, marks, live, cur:null, real:false, method:'corner', corners:[], walls:[], wpend:null, ops:[], pending:null, kind:'window', phase:'corners', floorY:null, done:false, rid};
   await ren.xr.setSession(session);
   const viewer = await session.requestReferenceSpace('viewer');
   const hts = await session.requestHitTestSource({space:viewer});
   const ref = ren.xr.getReferenceSpace();
   session.addEventListener('select', () => arAdd());
   session.addEventListener('end', arEnded);
+  let hadFloor = false;
   ren.setAnimationLoop((t, frame) => {
     if (!frame) return;
+    let pt = null, real = false;
     const hits = frame.getHitTestResults(hts);
     if (hits.length) {
-      const pose = hits[0].getPose(ref);
-      reticle.visible = true; reticle.matrix.fromArray(pose.transform.matrix);
-      ar.cur = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
-      if (!ar.hadHit) { ar.hadHit = true; arUI(); }
-    } else { reticle.visible = false; ar.cur = null; }
-    const last = ar.phase === 'corners' ? ar.corners.at(-1) : ar.pending;
-    if (last && ar.cur) {
-      const y = ar.floorY ?? last.y;
-      live.geometry.setFromPoints([new THREE.Vector3(last.x, y, last.z), new THREE.Vector3(ar.cur.x, y, ar.cur.z)]); live.visible = true;
-      $('#arDist').textContent = (Math.hypot(ar.cur.x - last.x, ar.cur.z - last.z)).toFixed(2).replace('.', ',') + ' m'; $('#arDist').hidden = false;
+      const m = hits[0].getPose(ref).transform.matrix, hy = m[13];
+      if (m[5] > .85) { if (ar.floorY == null) ar.floorY = hy; else if (Math.abs(hy - ar.floorY) < .06) ar.floorY = ar.floorY*.95 + hy*.05; }
+      if (ar.floorY != null && Math.abs(hy - ar.floorY) < .06) { pt = new THREE.Vector3(m[12], ar.floorY, m[14]); real = true; }
+    }
+    // Ohne erkannte Fläche: Blickstrahl mit der bekannten Bodenhöhe schneiden → Punkt frei setzbar
+    if (!pt && ar.floorY != null) {
+      const vp = frame.getViewerPose(ref);
+      if (vp) {
+        const m = vp.transform.matrix, fy = -m[9];
+        if (fy < -.05) { const s = (ar.floorY - m[13]) / fy; if (s > 0 && s < 12) pt = new THREE.Vector3(m[12] - m[8]*s, ar.floorY, m[14] - m[10]*s); }
+      }
+    }
+    ar.cur = pt; ar.real = real;
+    reticle.visible = !!pt; if (pt) { reticle.position.copy(pt); reticle.material.color.set(real ? 0xffffff : 0xffd166); }
+    if (!hadFloor && ar.floorY != null) { hadFloor = true; arUI(); }
+    const last = ar.phase === 'corners' ? (ar.method === 'corner' ? ar.corners.at(-1) : ar.wpend) : ar.pending;
+    if (last && pt) {
+      live.geometry.setFromPoints([new THREE.Vector3(last.x, ar.floorY, last.z), new THREE.Vector3(pt.x, ar.floorY, pt.z)]); live.visible = true;
+      $('#arDist').textContent = Math.hypot(pt.x - last.x, pt.z - last.z).toFixed(2).replace('.', ',') + ' m'; $('#arDist').hidden = false;
     } else { live.visible = false; $('#arDist').hidden = true; }
     ren.render(scene, cam);
   });
   arUI();
 }
-function arDot(p, color) { const m = new THREE.Mesh(new THREE.SphereGeometry(.025, 16, 12), new THREE.MeshBasicMaterial({color})); m.position.copy(p); return m; }
+function lineX(p1, p2, q1, q2) {
+  const d1 = {x:p2.x - p1.x, z:p2.z - p1.z}, d2 = {x:q2.x - q1.x, z:q2.z - q1.z}, cr = d1.x*d2.z - d1.z*d2.x;
+  if (Math.abs(cr) < 1e-4 * Math.hypot(d1.x, d1.z) * Math.hypot(d2.x, d2.z)) return null;
+  const s = ((q1.x - p1.x)*d2.z - (q1.z - p1.z)*d2.x) / cr;
+  return {x:p1.x + d1.x*s, z:p1.z + d1.z*s};
+}
+function wallCorners(W) {
+  const n = W.length, out = [];
+  for (let i = 0; i < n; i++) { const a = W[(i - 1 + n) % n], b = W[i], c = lineX(a[0], a[1], b[0], b[1]); if (!c) return null; out.push(c); }
+  return out;
+}
+function arDot(p, color, r = .025) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({color})); m.position.copy(p); return m; }
 function arRedraw() {
   const g = ar.marks; while (g.children.length) { const c = g.children.pop(); c.geometry.dispose(); }
-  const y = ar.floorY ?? 0, P = ar.corners.map(c => new THREE.Vector3(c.x, y, c.z));
-  P.forEach(p => g.add(arDot(p, 0x2f6f5e)));
-  if (P.length > 1) { const pts = ar.phase === 'corners' ? P : [...P, P[0]]; g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color:0x7fd1b9}))); }
+  const y = ar.floorY ?? 0, V3 = c => new THREE.Vector3(c.x, y, c.z), line = (pts, color) => g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color})));
+  if (ar.method === 'wall' && ar.phase === 'corners') {
+    ar.walls.forEach(([a, b]) => { g.add(arDot(V3(a), 0x7fd1b9), arDot(V3(b), 0x7fd1b9)); line([V3(a), V3(b)], 0x7fd1b9); });
+    if (ar.wpend) g.add(arDot(V3(ar.wpend), 0x7fd1b9));
+    for (let i = 1; i < ar.walls.length; i++) { const c = lineX(ar.walls[i - 1][0], ar.walls[i - 1][1], ar.walls[i][0], ar.walls[i][1]); if (c) g.add(arDot(V3(c), 0xffd166, .035)); }
+  } else {
+    const P = ar.corners.map(V3);
+    P.forEach(p => g.add(arDot(p, 0x2f6f5e)));
+    if (P.length > 1) line(ar.phase === 'corners' ? P : [...P, P[0]], 0x7fd1b9);
+  }
   const col = {window:0x4a8fc4, door:0xe0782f, open:0xd6b44a};
-  for (const o of ar.ops) { const a = new THREE.Vector3(o.a.x, y, o.a.z), b = new THREE.Vector3(o.b.x, y, o.b.z); g.add(arDot(a, col[o.kind]), arDot(b, col[o.kind])); g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), new THREE.LineBasicMaterial({color:col[o.kind]}))); }
-  if (ar.pending) g.add(arDot(new THREE.Vector3(ar.pending.x, y, ar.pending.z), col[ar.kind]));
+  for (const o of ar.ops) { g.add(arDot(V3(o.a), col[o.kind]), arDot(V3(o.b), col[o.kind])); line([V3(o.a), V3(o.b)], col[o.kind]); }
+  if (ar.pending) g.add(arDot(V3(ar.pending), col[ar.kind]));
 }
 function arUI() {
   if (!ar) return;
   let msg, btns;
-  if (!ar.hadHit) msg = 'Bewege das Handy langsam und richte es auf den Boden, bis ein weißer Kreis erscheint.';
+  if (ar.floorY == null) msg = 'Richte das Handy auf den Boden und bewege es langsam, bis ein weißer Kreis erscheint.';
   if (ar.phase === 'corners') {
-    const n = ar.corners.length;
-    msg ||= n === 0 ? 'Ecke 1: Ziele mit dem Kreis auf die Bodenecke LINKS an der Wand, die im Plan oben liegen soll. Dann im Uhrzeigersinn weiter.'
-      : n < 3 ? `Ecke ${n + 1}: nächste Bodenecke im Uhrzeigersinn anpeilen.` : `${n} Ecken gesetzt. Weitere Ecke oder „Weiter“ für Fenster & Türen.`;
-    btns = `<button data-act="arUndo" ${n ? '' : 'disabled'}>↶</button><button class="pri big" data-act="arAdd">＋ Ecke</button><button data-act="arNext" ${n < 3 ? 'disabled' : ''}>Weiter ›</button>`;
+    const isW = ar.method === 'wall', n = isW ? ar.walls.length : ar.corners.length, empty = !n && !ar.wpend;
+    const methodSeg = empty ? `<div class="seg arseg"><button data-act="arMethod" data-k="corner" class="${!isW ? 'on' : ''}">Ecken antippen</button><button data-act="arMethod" data-k="wall" class="${isW ? 'on' : ''}">Wände antippen</button></div>` : '';
+    if (!isW) msg ||= n === 0 ? 'Ecke 1: Ziele mit dem Kreis auf die Bodenecke LINKS an der Wand, die im Plan oben liegen soll, dann im Uhrzeigersinn weiter. Gelber Kreis = Punkt wird über die Bodenhöhe geschätzt – du kannst ihn trotzdem setzen.'
+      : `Ecke ${n + 1}: nächste Bodenecke im Uhrzeigersinn. ${n >= 3 ? 'Oder „Weiter“, wenn alle Ecken gesetzt sind.' : ''}`;
+    else msg ||= ar.wpend ? `Wand ${n + 1}: zweiten Punkt weiter entlang DERSELBEN Wand am Fußboden setzen (möglichst weit auseinander).`
+      : `Wand ${n + 1}: einen Punkt am Fuß der Wand setzen – die Ecke muss nicht sichtbar sein. ${n === 0 ? 'Beginne mit der Wand, die im Plan oben liegen soll, dann im Uhrzeigersinn.' : n >= 3 ? 'Oder „Weiter“, wenn alle Wände erfasst sind.' : ''}`;
+    btns = `${methodSeg}<button data-act="arUndo" ${empty ? 'disabled' : ''}>↶</button><button class="pri big" data-act="arAdd">＋ ${isW ? 'Punkt' : 'Ecke'}</button><button data-act="arNext" ${n < 3 || ar.wpend ? 'disabled' : ''}>Weiter ›</button>`;
   } else {
     msg ||= `${KINDS_OPEN[ar.kind]}: ${ar.pending ? 'jetzt den RECHTEN Rand am Boden markieren.' : 'am Boden direkt unter dem LINKEN Rand einen Punkt setzen.'} (${ar.ops.length} markiert)`;
     btns = `<div class="seg arseg">${Object.entries(KINDS_OPEN).map(([k, v]) => `<button data-act="arKind" data-k="${k}" class="${ar.kind === k ? 'on' : ''}">${v}</button>`).join('')}</div>
@@ -1180,85 +1365,133 @@ function arUI() {
 }
 function arAdd() {
   if (!ar) return;
-  if (!ar.cur) return toast('Kein Boden erkannt – Handy langsam bewegen');
+  if (!ar.cur) return toast(ar.floorY == null ? 'Erst den Boden erkennen lassen' : 'Handy etwas nach unten neigen');
   const p = ar.cur.clone();
-  if (ar.floorY == null) ar.floorY = p.y;
-  if (ar.phase === 'corners') ar.corners.push(p);
-  else if (!ar.pending) ar.pending = p;
+  if (ar.phase === 'corners') {
+    if (ar.method === 'corner') ar.corners.push(p);
+    else if (!ar.wpend) ar.wpend = p;
+    else { if (Math.hypot(p.x - ar.wpend.x, p.z - ar.wpend.z) < .1) return toast('Punkte weiter auseinander setzen (mind. 10 cm)'); ar.walls.push([ar.wpend, p]); ar.wpend = null; }
+  } else if (!ar.pending) ar.pending = p;
   else { ar.ops.push({kind:ar.kind, a:ar.pending, b:p}); ar.pending = null; }
   navigator.vibrate?.(15); arRedraw(); arUI();
 }
 function arAct(act, b) {
   if (!ar) return;
-  if (act === 'arUndo') { if (ar.phase === 'corners') ar.corners.pop(); else if (ar.pending) ar.pending = null; else if (ar.ops.length) ar.ops.pop(); else ar.phase = 'corners'; arRedraw(); arUI(); }
-  if (act === 'arAdd') arAdd();
-  if (act === 'arNext') { ar.phase = 'open'; arRedraw(); arUI(); }
-  if (act === 'arKind') { ar.kind = b.dataset.k; ar.pending = null; arRedraw(); arUI(); }
-  if (act === 'arFinish') { ar.done = true; ar.session.end(); }
-  if (act === 'arCancel') { ar.done = false; ar.session.end(); }
+  if (act === 'arUndo') {
+    if (ar.phase === 'corners') { if (ar.method === 'corner') ar.corners.pop(); else if (ar.wpend) ar.wpend = null; else ar.walls.pop(); }
+    else if (ar.pending) ar.pending = null; else if (ar.ops.length) ar.ops.pop();
+    else { ar.phase = 'corners'; if (ar.method === 'wall') ar.corners = []; }
+  }
+  if (act === 'arMethod') ar.method = b.dataset.k;
+  if (act === 'arAdd') return arAdd();
+  if (act === 'arNext') {
+    if (ar.method === 'wall') {
+      const c = wallCorners(ar.walls);
+      if (!c) return toast('Zwei aufeinanderfolgende Wände sind parallel – die Wand dazwischen fehlt');
+      ar.corners = c.map(q => new THREE.Vector3(q.x, ar.floorY, q.z));
+    }
+    ar.phase = 'open';
+  }
+  if (act === 'arKind') { ar.kind = b.dataset.k; ar.pending = null; }
+  if (act === 'arFinish') { ar.done = true; return ar.session.end(); }
+  if (act === 'arCancel') { ar.done = false; return ar.session.end(); }
+  arRedraw(); arUI();
 }
 function arEnded() {
   const st = ar; if (!st) return; ar = null;
   st.ren.setAnimationLoop(null); st.ren.dispose(); st.ren.domElement.remove();
   $('#ar').hidden = true;
-  if (st.done && st.corners.length >= 3) { arResult = {...arToRoom(st), rid:st.rid}; showARResult(); }
+  if (st.done && st.corners.length >= 3) { arResult = {res:arToRoom(st), rid:st.rid, ortho:true}; showARResult(); }
   else if (st.done) toast('Mindestens 3 Ecken nötig');
 }
+// AR-Weltkoordinaten (Meter, x/z) → Plan (cm), erste Wand waagerecht
 function arToRoom(st) {
-  const P = st.corners.map(v => ({x:v.x, z:v.z})), a = Math.atan2(P[1].z - P[0].z, P[1].x - P[0].x), c = Math.cos(-a), s = Math.sin(-a);
-  const rot = q => ({x:(q.x - P[0].x)*c - (q.z - P[0].z)*s, z:(q.x - P[0].x)*s + (q.z - P[0].z)*c});
-  const flip = P.map(rot).reduce((t, q) => t + q.z, 0) < 0 ? -1 : 1;
-  const tf = q => { const r = rot(q); return {x:r.x, z:r.z*flip}; };
-  const R = P.map(tf), xs = R.map(q => q.x), zs = R.map(q => q.z), minX = Math.min(...xs), minZ = Math.min(...zs);
-  let w, d;
-  if (R.length === 4) { const L = (i, j) => Math.hypot(R[i].x - R[j].x, R[i].z - R[j].z); w = (L(0, 1) + L(2, 3))/2; d = (L(1, 2) + L(3, 0))/2; }
-  else { w = Math.max(...xs) - minX; d = Math.max(...zs) - minZ; }
-  w *= 100; d *= 100;
-  const loc = v => { const q = tf(v); return {x:(q.x - minX)*100, y:(q.z - minZ)*100}; };
-  const ops = st.ops.map(o => {
-    const A = loc(o.a), B = loc(o.b), mx = (A.x + B.x)/2, my = (A.y + B.y)/2;
-    const dd = {N:Math.abs(my), S:Math.abs(d - my), W:Math.abs(mx), E:Math.abs(w - mx)};
-    const side = Object.keys(dd).reduce((p, q) => dd[p] < dd[q] ? p : q);
-    const ns = side === 'N' || side === 'S', ua = ns ? A.x : A.y, ub = ns ? B.x : B.y;
-    return {kind:o.kind, side, offset:Math.min(ua, ub), width:Math.abs(ub - ua)};
+  const P = st.corners.map(v => ({x:v.x, z:v.z}));
+  const a = Math.atan2(P[1].z - P[0].z, P[1].x - P[0].x), c = Math.cos(-a), s = Math.sin(-a);
+  const tf = q => ({x:((q.x - P[0].x)*c - (q.z - P[0].z)*s)*100, y:((q.x - P[0].x)*s + (q.z - P[0].z)*c)*100});
+  return {pts:P.map(tf), ops:st.ops.map(o => ({kind:o.kind, a:tf(o.a), b:tf(o.b)}))};
+}
+// fast-rechte Winkel exakt rechtwinklig machen, Schließfehler gleichmäßig verteilen
+function orthogonalize(P) {
+  const n = P.length, L = [], A = [];
+  for (let i = 0; i < n; i++) { const p = P[i], q = P[(i + 1) % n]; L.push(Math.hypot(q.x - p.x, q.y - p.y)); A.push(Math.atan2(q.y - p.y, q.x - p.x)); }
+  const D = A.map(a => { const q = Math.round(a/(Math.PI/2))*(Math.PI/2); return Math.abs(a - q) < 7*Math.PI/180 ? q : a; });
+  const V = [{x:P[0].x, y:P[0].y}];
+  for (let i = 0; i < n - 1; i++) V.push({x:V[i].x + L[i]*Math.cos(D[i]), y:V[i].y + L[i]*Math.sin(D[i])});
+  const ex = V[n - 1].x + L[n - 1]*Math.cos(D[n - 1]) - V[0].x, ey = V[n - 1].y + L[n - 1]*Math.sin(D[n - 1]) - V[0].y;
+  const tot = L.reduce((a, b) => a + b, 0); let cum = 0;
+  for (let i = 1; i < n; i++) { cum += L[i - 1]; V[i].x -= ex*cum/tot; V[i].y -= ey*cum/tot; }
+  return V;
+}
+function finalizeAR(res, ortho) {
+  let int = ortho ? orthogonalize(res.pts) : res.pts.map(p => ({...p}));
+  if (area2(int) < 0) int.reverse();
+  const outer = offsetPoly(int, -WALL);
+  const mx = Math.min(...outer.map(p => p.x)), my = Math.min(...outer.map(p => p.y));
+  for (const p of [...int, ...outer]) { p.x = Math.round((p.x - mx)*10)/10; p.y = Math.round((p.y - my)*10)/10; }
+  const n = int.length;
+  const ops = res.ops.map(o => {
+    const A = {x:o.a.x - mx, y:o.a.y - my}, B = {x:o.b.x - mx, y:o.b.y - my}, M = {x:(A.x + B.x)/2, y:(A.y + B.y)/2};
+    let best = null;
+    for (let i = 0; i < n; i++) {
+      const p = int[i], q = int[(i + 1) % n], L = Math.hypot(q.x - p.x, q.y - p.y) || 1, dx = (q.x - p.x)/L, dy = (q.y - p.y)/L;
+      const t = clamp((M.x - p.x)*dx + (M.y - p.y)*dy, 0, L), d = Math.hypot(p.x + dx*t - M.x, p.y + dy*t - M.y);
+      if (!best || d < best.d) best = {d, i, dx, dy, p};
+    }
+    const {i, dx, dy, p} = best, ua = (A.x - p.x)*dx + (A.y - p.y)*dy, ub = (B.x - p.x)*dx + (B.y - p.y)*dy;
+    const shift = (p.x - outer[i].x)*dx + (p.y - outer[i].y)*dy;
+    return {kind:o.kind, edge:i, offset:Math.min(ua, ub) + shift, width:Math.abs(ub - ua)};
   });
-  return {w, d, ops, nCorners:R.length};
+  return {int, outer, ops};
+}
+function arPreview(f) {
+  const P = f.int, xs = P.map(p => p.x), ys = P.map(p => p.y), x0 = Math.min(...xs), y0 = Math.min(...ys), W = Math.max(...xs) - x0 || 1, H = Math.max(...ys) - y0 || 1;
+  const pad = Math.max(W, H)*.14, vb = `${x0 - pad} ${y0 - pad} ${W + 2*pad} ${H + 2*pad}`, u = Math.max(W, H)/100, n = P.length;
+  let h = `<polygon points="${P.map(p => `${p.x},${p.y}`).join(' ')}" fill="#d9b98a" stroke="#3f3f3f" stroke-width="${1.2*u}"/>`;
+  for (let i = 0; i < n; i++) {
+    const p = P[i], q = P[(i + 1) % n], L = Math.hypot(q.x - p.x, q.y - p.y), nx = -(q.y - p.y)/L, ny = (q.x - p.x)/L;
+    h += `<text x="${(p.x + q.x)/2 - nx*5*u}" y="${(p.y + q.y)/2 - ny*5*u + 1.5*u}" font-size="${4*u}" text-anchor="middle" fill="#7a3e12" font-weight="700">${fmtM(L)}</text>`;
+  }
+  const col = {window:'#4a8fc4', door:'#e0782f', open:'#d6b44a'};
+  for (const o of f.ops) {
+    const p = f.outer[o.edge], q = f.outer[(o.edge + 1) % n], L = Math.hypot(q.x - p.x, q.y - p.y), dx = (q.x - p.x)/L, dy = (q.y - p.y)/L;
+    h += `<line x1="${p.x + dx*o.offset}" y1="${p.y + dy*o.offset}" x2="${p.x + dx*(o.offset + o.width)}" y2="${p.y + dy*(o.offset + o.width)}" stroke="${col[o.kind]}" stroke-width="${3*u}"/>`;
+  }
+  return `<svg viewBox="${vb}" style="width:100%;max-height:240px;display:block;margin:6px 0">${h}</svg>`;
 }
 function showARResult() {
-  const r = arResult, room = find('room', r.rid);
-  const nW = r.ops.filter(o => o.kind === 'window').length, nD = r.ops.length - nW;
-  openModal('📐 Vermessung fertig', `<p><b>${fmtM(r.w)} × ${fmtM(r.d)} m</b> (innen) · ${nW} Fenster · ${nD} Türen/Durchgänge${r.nCorners !== 4 ? `<br><span class="hint">${r.nCorners} Ecken gemessen – als Rechteck angenähert.</span>` : ''}</p>
+  const r = arResult, room = find('room', r.rid), f = finalizeAR(r.res, r.ortho);
+  const nW = f.ops.filter(o => o.kind === 'window').length, nD = f.ops.length - nW;
+  const area = (Math.abs(area2(f.int))/2/10000).toFixed(1).replace('.', ',');
+  openModal('📐 Vermessung fertig', `<p><b>${f.int.length} Ecken · ${area} m²</b> · ${nW} Fenster · ${nD} Türen/Durchgänge</p>
+    ${arPreview(f)}
+    <label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--ink)"><input type="checkbox" id="arortho" ${r.ortho ? 'checked' : ''} style="width:auto"> Fast rechte Winkel begradigen (±7°)</label>
     <div class="g2"><label>Raumhöhe (cm)<input type="number" id="arh" value="${room?.h || 250}"></label><label>Übernehmen in<select id="art">${room ? `<option value="${room.id}">${esc(room.name)} (ersetzen)</option>` : ''}<option value="new">Neuer Raum</option></select></label></div>
-    <p class="hint">Fenster bekommen Standardhöhen (Brüstung 90 cm, Höhe 140 cm), Türen 210 cm – danach einzeln antippen und anpassen. Möbel im Raum bleiben erhalten.</p>
+    <p class="hint">Danach kannst du jede Ecke im Plan verschieben und Wandlängen exakt eintragen. Fenster bekommen Standardhöhen (Brüstung 90, Höhe 140 cm), Türen 210 cm. Möbel bleiben erhalten.</p>
     <div class="actions"><button class="pri" data-act="arApply">Übernehmen</button><button data-act="arRetry">Neu messen</button><button data-act="close">Verwerfen</button></div>`);
-}
-function resizeRoom(r, nw, nd) {
-  const right = r.x + r.w, bottom = r.y + r.d, dw = nw - r.w, dd = nd - r.d;
-  const inR = (q, x, y) => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.d;
-  const moves = S.rooms.filter(q => q !== r).map(q => {
-    let mx = 0, my = 0;
-    if (q.x >= right - 1 && q.y < bottom && q.y + q.d > r.y) mx = dw;
-    if (q.y >= bottom - 1 && q.x < right && q.x + q.w > r.x) my = dd;
-    return {q, mx, my, objs:[...S.items.filter(it => inR(q, it.x, it.y)), ...S.media.filter(m => m.pin && inR(q, m.pin.x, m.pin.y)).map(m => m.pin)]};
-  });
-  for (const {q, mx, my, objs} of moves) if (mx || my) { q.x += mx; q.y += my; objs.forEach(o => { o.x += mx; o.y += my; }); }
-  r.w = nw; r.d = nd;
+  $('#arortho').addEventListener('change', e => { arResult.ortho = e.target.checked; showARResult(); });
 }
 function arApply() {
   const res = arResult; if (!res) return;
   reconUndo = JSON.stringify(S);
-  const h = clamp(parseFloat($('#arh').value) || 250, 180, 600), target = $('#art').value;
+  const f = finalizeAR(res.res, res.ortho), h = clamp(parseFloat($('#arh').value) || 250, 180, 600), target = $('#art').value;
   let r = target !== 'new' && find('room', target);
-  const nw = snap(res.w + 2*WALL), nd = snap(res.d + 2*WALL);
-  if (!r) { const B = bounds(); r = {id:uid(), name:'Gemessener Raum', x:S.rooms.length ? snap(B.x + B.w) : 0, y:S.rooms.length ? B.y : 0, w:nw, d:nd, h, floor:{t:'wood', c:'#c09060'}, wall:{t:'plaster', c:'#f4f1eb'}, open:[]}; S.rooms.push(r); }
-  else { const kids = S.items.filter(it => roomAt(it.x, it.y) === r); resizeRoom(r, nw, nd); r.h = h; kids.forEach(it => fitInRoom(it, r, false)); }
-  r.open = res.ops.filter(o => o.width >= 30).map(o => {
-    const n = newOpen(o.kind, r, o.side), L = (o.side === 'N' || o.side === 'S') ? r.w : r.d;
-    n.width = Math.round(clamp(o.width, 30, L - 2*WALL)); n.offset = Math.round(clamp(o.offset + WALL, WALL, Math.max(WALL, L - WALL - n.width)));
+  if (!r) {
+    const B = bounds(), ax = S.rooms.length ? snap(B.x + B.w + 50) : 0, ay = S.rooms.length ? B.y : 0;
+    r = {id:uid(), name:'Gemessener Raum', pts:f.outer.map(p => ({x:p.x + ax, y:p.y + ay})), h, floor:{t:'wood', c:'#c09060'}, wall:{t:'plaster', c:'#f4f1eb'}, open:[]};
+    syncBox(r); S.rooms.push(r);
+  } else {
+    const kids = S.items.filter(it => roomAt(it.x, it.y) === r);
+    placeRoomPts(r, f.outer.map(p => ({x:p.x + r.x, y:p.y + r.y}))); r.h = h;
+    kids.forEach(it => fitInRoom(it, r, false));
+  }
+  r.open = f.ops.filter(o => o.width >= 30).map(o => {
+    const n = newOpen(o.kind, r, o.edge), L = edge(r, o.edge).L;
+    n.width = Math.round(clamp(o.width, 30, L - 2*WALL)); n.offset = Math.round(clamp(o.offset, WALL, Math.max(WALL, L - WALL - n.width)));
     n.height = Math.min(n.height, h - (o.kind === 'window' ? n.sill + 5 : 2)); return n;
   });
   sel = {t:'room', id:r.id}; arResult = null; closeModal(); fit(); changed(true);
-  toast('Raum übernommen – Fenster/Türen antippen, um Höhen anzupassen');
+  toast('Raum übernommen – Ecken lassen sich im Plan noch verschieben');
 }
 
 /* ================= Foto-Werkzeuge: Farb-Pipette & Messen ================= */
@@ -1378,6 +1611,7 @@ function M(m) {
 }
 const GLASS = new THREE.MeshStandardMaterial({color:'#cfe4ef', transparent:true, opacity:.25, roughness:.05, metalness:.1, side:THREE.DoubleSide, depthWrite:false});
 const CHROME = {t:'metal', c:'#c9ccd0'};
+const CEIL = new THREE.MeshBasicMaterial({color:'#e4e1db'});
 const shade = (m, f) => { const c = new THREE.Color(m.c); c.multiplyScalar(f); return {t:m.t, c:'#' + c.getHexString()}; };
 function meterUV(g, w, h, d) {
   const uv = g.attributes.uv, dims = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
@@ -1410,12 +1644,14 @@ function innerX(shape, ai, bi, wi, ti, y) {
 }
 function extrude(shape, depth, m, z) { const g = new THREE.ExtrudeGeometry(shape, {depth, bevelEnabled:false, curveSegments:28}); const me = new THREE.Mesh(g, M(m)); me.position.z = z; return me; }
 
-function buildSide(r, s, grp) {
-  const si = sideInfo(r, s), L = si.L/100, H = r.h/100, t = WALL/100, inS = SIDE_IN[s];
-  const g = new THREE.Group(); g.position.set(si.sx/100, 0, si.sy/100); if (si.dy) g.rotation.y = -Math.PI/2;
+function buildSide(r, i, grp) {
+  const si = sideInfo(r, i), L = si.L/100, H = r.h/100, t = WALL/100;
+  const pv = edge(r, i - 1), nx = edge(r, i + 1);
+  const e0 = (pv.dx*si.dy - pv.dy*si.dx) < -1e-3 ? t : 0, e1 = (si.dx*nx.dy - si.dy*nx.dx) < -1e-3 ? t : 0;
+  const g = new THREE.Group(); g.position.set(si.sx/100, 0, si.sy/100); g.rotation.y = Math.atan2(-si.dy, si.dx);
   g.userData = {ox:-si.nx, oz:-si.ny, cx:(si.sx + si.dx*si.L/2)/100, cz:(si.sy + si.dy*si.L/2)/100}; sideGroups.push(g);
-  const ops = sideOps(r, s).map(n => ({...n, a:n.a/100, w:n.w/100, b:n.b/100, top:n.top/100}));
-  const sh = new THREE.Shape(); sh.moveTo(0, 0); let end = 0; const used = [];
+  const ops = sideOps(r, i).map(n => ({...n, a:n.a/100, w:n.w/100, b:n.b/100, top:n.top/100}));
+  const sh = new THREE.Shape(); sh.moveTo(-e0, 0); let end = 0; const used = [];
   for (const o of ops.filter(o => o.floor).sort((x, y) => x.a - y.a)) {
     if (o.a < end + .005 || o.w < .1) continue;
     const shp = o.shape === 'round' ? 'arch' : o.shape;
@@ -1424,12 +1660,12 @@ function buildSide(r, s, grp) {
     else { sh.lineTo(o.a, o.top); sh.lineTo(o.a + o.w, o.top); }
     sh.lineTo(o.a + o.w, 0); end = o.a + o.w; used.push({...o, shape:shp});
   }
-  sh.lineTo(L, 0); sh.lineTo(L, H); sh.lineTo(0, H); sh.lineTo(0, 0);
+  sh.lineTo(L + e1, 0); sh.lineTo(L + e1, H); sh.lineTo(-e0, H); sh.lineTo(-e0, 0);
   const wins = ops.filter(o => !o.floor && o.w > .1);
   for (const o of wins) sh.holes.push(outline(new THREE.Path(), o.shape, o.a, o.b, o.w, o.top));
   g.add(extrude(sh, t, r.wall, -t/2));
-  for (const o of used) floorOpening(g, o, t, inS);
-  for (const o of wins) windowParts(g, o, t, inS);
+  for (const o of used) floorOpening(g, o, t, 1);
+  for (const o of wins) windowParts(g, o, t, 1);
   grp.add(g);
 }
 function uTrim(shape, a, w, top, fw) {
@@ -1526,12 +1762,13 @@ function build3D() {
   if (root) { scene.remove(root); root.traverse(o => o.geometry && o.geometry.dispose()); }
   root = new THREE.Group(); ceilings = []; sideGroups = [];
   for (const r of S.rooms) {
-    const w = r.w/100, d = r.d/100, H = r.h/100;
-    const fl = new THREE.Mesh(planeUV(new THREE.PlaneGeometry(w, d), w, d), M(r.floor));
-    fl.rotation.x = -Math.PI/2; fl.position.set(r.x/100 + w/2, .001, r.y/100 + d/2); root.add(fl);
-    const ce = new THREE.Mesh(new THREE.PlaneGeometry(w, d), M({t:'plain', c:'#fbfaf7'}));
-    ce.rotation.x = Math.PI/2; ce.position.set(r.x/100 + w/2, H, r.y/100 + d/2); ce.visible = mode === 'walk'; ceilings.push(ce); root.add(ce);
-    for (const s of ['N', 'E', 'S', 'W']) buildSide(r, s, root);
+    const H = r.h/100;
+    const fs = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x/100, -p.y/100)));
+    const fl = new THREE.Mesh(new THREE.ShapeGeometry(fs).rotateX(-Math.PI/2), M(r.floor)); fl.position.y = .001; root.add(fl);
+    const cs = new THREE.Shape(r.pts.map(p => new THREE.Vector2(p.x/100, p.y/100)));
+    const ce = new THREE.Mesh(new THREE.ShapeGeometry(cs).rotateX(Math.PI/2), CEIL);
+    ce.position.y = H; ce.visible = mode === 'walk'; ceilings.push(ce); root.add(ce);
+    for (let i = 0; i < r.pts.length; i++) buildSide(r, i, root);
   }
   for (const it of S.items) root.add(furn(it));
   scene.add(root);
@@ -1551,7 +1788,7 @@ function placeOrbit() { camera.position.set(O.tx + O.r*Math.sin(O.ph)*Math.sin(O
 const Wk = {x:0, z:0, yaw:0, pitch:0, mv:{x:0, y:0}, keys:{}};
 function startWalk() {
   const r = (sel && sel.t === 'room' && find('room', sel.id)) || S.rooms[0];
-  if (r) { Wk.x = (r.x + r.w/2)/100; Wk.z = (r.y + r.d/2)/100; }
+  if (r) { const lp = labelPoint(r); Wk.x = lp.x/100; Wk.z = lp.y/100; }
   Wk.yaw = 0; Wk.pitch = 0; camera.rotation.order = 'YXZ';
 }
 let segCache = null;
