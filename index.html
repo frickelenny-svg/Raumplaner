@@ -1457,7 +1457,7 @@ const DETECT = [
   {k:'chair', de:'Stuhl', p:['a chair'], g:'Stühle'},
   {k:'tvbench', de:'TV-Bank', p:['a tv stand'], g:'TV-Bänke'},
   {k:'plant', de:'Pflanze', p:['a potted plant'], g:'Pflanzen'},
-  {k:'rug', de:'Teppich', p:['a rug'], g:'Teppiche'},
+  {k:'rug', de:'Teppich', p:['a rug', 'a carpet', 'a shaggy rug'], g:'Teppiche'},
   {k:'lamp', de:'Stehlampe', p:['a floor lamp'], g:'Lampen'},
   {k:'fridge', de:'Kühlschrank', p:['a refrigerator'], g:'Küche', only:'Kühlschrank'},
 ];
@@ -1477,17 +1477,20 @@ function getDetector(onProg) {
       const pct = Tt ? Math.round(L / Tt * 100) : 0;
       detProg?.forEach(f => { try { f(pct, Tt); } catch (e) {} });
     }});
-    detRaw = T.RawImage; detPipe = pipe; return pipe;
+    detRaw = T.RawImage; detPipe = pipe; try { localStorage.setItem('detReady', '1'); } catch (e) {} return pipe;
   })().catch(e => { detLoad = null; throw e; });
   return detLoad;
 }
+// Modell vorab im Hintergrund laden, wenn es schon einmal benutzt wurde (liegt dann im Browser-Cache)
+function preloadDetector() { if (!inFrame && !detPipe) getDetector().catch(() => {}); }
+setTimeout(() => { try { if (localStorage.getItem('detReady') === '1') preloadDetector(); } catch (e) {} }, 2500);
 function iou(a, b) {
   const x0 = Math.max(a.xmin, b.xmin), y0 = Math.max(a.ymin, b.ymin), x1 = Math.min(a.xmax, b.xmax), y1 = Math.min(a.ymax, b.ymax);
   const I = Math.max(0, x1 - x0) * Math.max(0, y1 - y0), A = (a.xmax - a.xmin)*(a.ymax - a.ymin), B = (b.xmax - b.xmin)*(b.ymax - b.ymin);
   return I / (A + B - I || 1);
 }
 // Erkennt Möbel auf einem Canvas; Boxen normiert (0–1)
-const CAT_MIN = {rug:.3, lamp:.22, plant:.2, chair:.18, night:.18};
+const CAT_MIN = {rug:.12, lamp:.22, plant:.18, chair:.2, night:.18};
 async function runDetect(canvas, threshold = .15) {
   const det = await getDetector();
   const out = await det(detRaw.fromCanvas(canvas), PROMPTS, {threshold, percentage:true});
@@ -1495,7 +1498,8 @@ async function runDetect(canvas, threshold = .15) {
     .filter(r => r.cat && r.score >= (CAT_MIN[r.cat.k] ?? threshold) && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) > .006 && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) < .97)
     .sort((a, b) => b.score - a.score);
   const keep = [];
-  for (const r of res) if (!keep.some(k => iou(k.box, r.box) > .5)) keep.push(r);
+  const inside = (a, b) => { const x0 = Math.max(a.xmin, b.xmin), y0 = Math.max(a.ymin, b.ymin), x1 = Math.min(a.xmax, b.xmax), y1 = Math.min(a.ymax, b.ymax), I = Math.max(0, x1 - x0)*Math.max(0, y1 - y0); return I / Math.min((a.xmax - a.xmin)*(a.ymax - a.ymin), (b.xmax - b.xmin)*(b.ymax - b.ymin)); };
+  for (const r of res) if (!keep.some(k => iou(k.box, r.box) > .5 || (k.cat.k !== 'rug' && r.cat.k !== 'rug' && inside(k.box, r.box) > .7))) keep.push(r);
   return keep.slice(0, 8);
 }
 function catItems(cat) { return CAT.map((c, i) => ({c, i})).filter(({c}) => c.g === cat.g && (!cat.only || c.n.includes(cat.only))); }
@@ -1512,9 +1516,22 @@ function canvasFrom(img, max = 768) {
 }
 const detUnavailable = () => inFrame ? 'Die Möbelerkennung lädt ein Modell aus dem Internet und funktioniert nur über deine eigene Webadresse (Vercel), nicht in dieser eingebetteten Ansicht.' : '';
 // Platziertes Möbel aus Kategorie + Katalogwahl + Plan-Position/Blickrichtung
-function makeItem(ci, x, y, back) {
+function makeItem(ci, x, y, back, dims) {
   const c = CAT[ci];
-  return {id:uid(), n:c.n, w:c.w, d:c.d, h:c.h, mat:{...c.m}, k:c.k, link:'', e:c.e || 0, x, y, rot:normAng(Math.round(Math.atan2(back.x, -back.y)*180/Math.PI))};
+  return {id:uid(), n:dims ? `Teppich ${dims.w}×${dims.d}` : c.n, w:dims?.w || c.w, d:dims?.d || c.d, h:c.h, mat:{...c.m}, k:c.k, link:'', e:c.e || 0, x, y, rot:normAng(Math.round(Math.atan2(back.x, -back.y)*180/Math.PI))};
+}
+// liegt ein Möbel außerhalb, wird es an die nächste Stelle im Raum geschoben – nie gelöscht
+function placeInRoom(it, r) {
+  if (!pointInPoly(r.pts, it.x, it.y)) {
+    let best = null;
+    for (const e of innerEdges(r)) {
+      const t = clamp((it.x - e.A.x)*e.dx + (it.y - e.A.y)*e.dy, 0, e.L), qx = e.A.x + e.dx*t, qy = e.A.y + e.dy*t, d = Math.hypot(qx - it.x, qy - it.y);
+      if (!best || d < best.d) best = {d, qx, qy, e};
+    }
+    const k = Math.min(it.w, it.d)/2 + 5; it.x = best.qx + best.e.nx*k; it.y = best.qy + best.e.ny*k;
+    if (!pointInPoly(r.pts, it.x, it.y)) { const lp = labelPoint(r); it.x = lp.x; it.y = lp.y; }
+  }
+  if (it.k === 'rug') fitInRoom(it, r, false); else snapItemToWall(it, r);
 }
 // an nahe Wand andocken, wenn Lage und Winkel passen
 function snapItemToWall(it, r) {
@@ -1546,6 +1563,7 @@ function arUnsupported() {
 }
 async function startAR(rid, opts = {}) {
   if (!arOK) return arUnsupported();
+  if (opts.mode === 'furn') preloadDetector();
   const root = $('#ar'); root.hidden = false;
   let session;
   try { session = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay', 'camera-access', 'anchors'], domOverlay:{root}}); }
@@ -1668,13 +1686,29 @@ async function arDetect() {
       if (d.box.ymax > .97) { cut++; continue; }
       const fy = st.floorY, b = d.box, fl = shotFloor(shot, b.xmin, b.ymax, fy), fr = shotFloor(shot, b.xmax, b.ymax, fy), fc = shotFloor(shot, (b.xmin + b.xmax)/2, b.ymax, fy);
       if (!fc) continue;
-      const W = fl && fr ? Math.hypot(fl.x - fr.x, fl.z - fr.z)*100 : 0;
+      let W = fl && fr ? Math.hypot(fl.x - fr.x, fl.z - fr.z)*100 : 0;
       let bx = fc.x - camO.x, bz = fc.z - camO.z; const bl = Math.hypot(bx, bz) || 1; bx /= bl; bz /= bl;
-      const ci = pickItem(d.cat, W); if (ci == null) continue;
-      const it = CAT[ci], cx = fc.x + bx*it.d/200, cz = fc.z + bz*it.d/200;
+      let ci = pickItem(d.cat, W); if (ci == null) continue;
+      let it = CAT[ci], cx = fc.x + bx*it.d/200, cz = fc.z + bz*it.d/200, dims = null;
+      if (d.cat.k === 'rug') {
+        // Teppich liegt flach: auch die Oberkante trifft den Boden → echte Länge messbar
+        const tc = shotFloor(shot, (b.xmin + b.xmax)/2, b.ymin, fy), tl = shotFloor(shot, b.xmin, b.ymin, fy), tr = shotFloor(shot, b.xmax, b.ymin, fy);
+        if (tc) {
+          const D = Math.hypot(tc.x - fc.x, tc.z - fc.z)*100; if (tl && tr) W = (W + Math.hypot(tl.x - tr.x, tl.z - tr.z)*100)/2;
+          dims = {w:Math.max(40, snap(W)), d:Math.max(40, snap(D))}; cx = (fc.x + tc.x)/2; cz = (fc.z + tc.z)/2;
+          const L = Math.hypot(tc.x - fc.x, tc.z - fc.z) || 1; bx = (tc.x - fc.x)/L; bz = (tc.z - fc.z)/L;
+        }
+      }
       const rad = q => Math.max(CAT[q].w, CAT[q].d)/200;
-      const dup = st.furn.findIndex(f => Math.hypot(f.x - cx, f.z - cz) < Math.max(.45, (rad(ci) + rad(f.ci))*.6));
-      const entry = {cat:d.cat, ci, x:cx, y:fy, z:cz, bx, bz, W, score:d.score};
+      // gleiche Kategorie direkt nebeneinander (z. B. Schrank als zwei Hälften erkannt) → zu einem Möbel zusammenfassen
+      const twin = d.cat.k !== 'rug' ? st.furn.findIndex(f => f.cat.k === d.cat.k && Math.hypot(f.x - cx, f.z - cz) > .45 && Math.hypot(f.x - cx, f.z - cz) < ((f.W || CAT[f.ci].w) + (W || it.w))/200*.85) : -1;
+      if (twin >= 0) {
+        const f = st.furn[twin], dd = Math.hypot(f.x - cx, f.z - cz)*100, mW = dd + ((f.W || CAT[f.ci].w) + (W || it.w))/2, mci = pickItem(d.cat, mW);
+        const m = {...f, ci:mci, W:mW, x:(f.x + cx)/2, z:(f.z + cz)/2, score:Math.max(f.score, d.score)};
+        unanch(f); st.furn[twin] = anch(m); continue;
+      }
+      const dup = st.furn.findIndex(f => Math.hypot(f.x - cx, f.z - cz) < Math.max(.45, (rad(ci) + rad(f.ci))*.6) && (f.cat.k === 'rug') === (d.cat.k === 'rug'));
+      const entry = {cat:d.cat, ci, x:cx, y:fy, z:cz, bx, bz, W, score:d.score, dims};
       if (dup >= 0) { if (st.furn[dup].score <= d.score) { unanch(st.furn[dup]); st.furn[dup] = anch(entry); } } else { st.furn.push(anch(entry)); n++; }
     }
     st.detMsg = dets.length ? `${n} neu erkannt.${cut ? ` ${cut}× Unterkante nicht im Bild – etwas weiter zurück.` : ''}` : 'Nichts erkannt – näher ran oder anderen Blickwinkel probieren.';
@@ -1723,7 +1757,7 @@ function arRedraw() {
   for (const o of ar.ops) { g.add(arDot(V3(o.a), col[o.kind]), arDot(V3(o.b), col[o.kind])); line([V3(o.a), V3(o.b)], col[o.kind]); }
   if (ar.pending) g.add(arDot(V3(ar.pending), col[ar.kind]));
   for (const f of ar.furn) {
-    const c = CAT[f.ci], w = c.w/100, h = Math.max(.02, c.h/100), d = c.d/100;
+    const c = CAT[f.ci], w = (f.dims?.w || c.w)/100, h = Math.max(.02, c.h/100), d = (f.dims?.d || c.d)/100;
     const e = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d)), new THREE.LineBasicMaterial({color:0xffd166}));
     e.position.set(f.x, y + h/2, f.z); e.rotation.y = Math.atan2(-f.bx, -f.bz); g.add(e);
   }
@@ -1752,7 +1786,7 @@ function arUI() {
   }
   if (ar.phase === 'furn') {
     msg = ar.detBusy ? ar.detMsg : `Richte die Kamera auf Möbel (ganz im Bild, inkl. Unterkante) und tippe „Erkennen“. ${ar.detMsg || ''}`;
-    btns = `<div class="arlist">${ar.furn.map((f, i) => `<div><span>${f.cat.de} → ${esc(CAT[f.ci].n)}${f.W ? ` · ~${fmtM(f.W)} m` : ''}</span><button data-act="arFurnDel" data-i="${i}">✕</button></div>`).join('')}</div>
+    btns = `<div class="arlist">${ar.furn.map((f, i) => `<div><span>${f.cat.de} → ${f.dims ? `${f.dims.w}×${f.dims.d} cm` : esc(CAT[f.ci].n)}${f.W && !f.dims ? ` · ~${fmtM(f.W)} m` : ''}</span><button data-act="arFurnDel" data-i="${i}">✕</button></div>`).join('')}</div>
       <button data-act="arUndo" ${ar.furn.length ? '' : 'disabled'}>↶</button><button class="pri big" data-act="arDetect" ${ar.detBusy ? 'disabled' : ''}>🔍 Erkennen</button><button data-act="arFinish" ${ar.detBusy ? 'disabled' : ''}>Fertig ✓</button>`;
   }
   $('#arMsg').textContent = msg; $('#arBtns').innerHTML = btns;
@@ -1787,6 +1821,7 @@ function arAct(act, b) {
   if (act === 'arAdd') return arAdd();
   if (act === 'arNext') {
     if (ar.method === 'wall' && !wallCorners(ar.walls)) return toast('Zwei aufeinanderfolgende Wände sind parallel – die Wand dazwischen fehlt');
+    preloadDetector();
     ar.phase = 'open';
   }
   if (act === 'arKind') { ar.kind = b.dataset.k; ar.pending = null; }
@@ -1812,7 +1847,7 @@ function arToRoom(st) {
   const a = Math.atan2(P[1].z - P[0].z, P[1].x - P[0].x), c = Math.cos(-a), s = Math.sin(-a);
   const tf = q => ({x:((q.x - P[0].x)*c - (q.z - P[0].z)*s)*100, y:((q.x - P[0].x)*s + (q.z - P[0].z)*c)*100});
   return {pts:P.map(tf), ops:st.ops.map(o => ({kind:o.kind, a:tf(o.a), b:tf(o.b)})),
-    furn:st.furn.map(f => ({ci:f.ci, p:tf(f), b:{x:f.bx*c - f.bz*s, y:f.bx*s + f.bz*c}}))};
+    furn:st.furn.map(f => ({ci:f.ci, dims:f.dims, p:tf(f), b:{x:f.bx*c - f.bz*s, y:f.bx*s + f.bz*c}}))};
 }
 // fast-rechte Winkel exakt rechtwinklig machen, Schließfehler gleichmäßig verteilen
 function orthogonalize(P) {
@@ -1845,7 +1880,7 @@ function finalizeAR(res, ortho) {
     const shift = (p.x - outer[i].x)*dx + (p.y - outer[i].y)*dy;
     return {kind:o.kind, edge:i, offset:Math.min(ua, ub) + shift, width:Math.abs(ub - ua)};
   });
-  const furn = (res.furn || []).map(f => ({ci:f.ci, x:f.p.x - mx, y:f.p.y - my, b:f.b}));
+  const furn = (res.furn || []).map(f => ({ci:f.ci, dims:f.dims, x:f.p.x - mx, y:f.p.y - my, b:f.b}));
   return {int, outer, ops, furn};
 }
 function arPreview(f) {
@@ -1884,13 +1919,13 @@ function applyFurnToRoom(st) {
   reconUndo = JSON.stringify(S);
   let added = 0, out = 0;
   for (const f of st.furn) {
-    const pp = map(f), b = {x:f.bx*c - f.bz*s, y:f.bx*s + f.bz*c}, it = makeItem(f.ci, pp.x, pp.y, b);
-    if (!pointInPoly(r.pts, it.x, it.y)) { out++; continue; }
-    snapItemToWall(it, r); S.items.push(it); added++;
+    const pp = map(f), b = {x:f.bx*c - f.bz*s, y:f.bx*s + f.bz*c}, it = makeItem(f.ci, pp.x, pp.y, b, f.dims);
+    if (!pointInPoly(r.pts, it.x, it.y)) out++;
+    placeInRoom(it, r); S.items.push(it); added++;
   }
   const meas = Math.hypot(a2.x - a1.x, a2.z - a1.z)*100, plan = dist(A, B);
   sel = {t:'room', id:r.id}; changed(true);
-  openModal('🛋 Möbel übernommen', `<p><b>${added} Möbel</b> in „${esc(r.name)}“ gestellt.${out ? ` ${out} lagen außerhalb des Raums und wurden weggelassen.` : ''}</p>
+  openModal('🛋 Möbel übernommen', `<p><b>${added} Möbel</b> in „${esc(r.name)}“ gestellt.${out ? ` ${out} davon lagen knapp außerhalb und wurden an die nächste Wand geschoben.` : ''}</p>
     <p class="hint">Bezugswand gemessen ${fmtM(meas)} m, im Plan ${fmtM(plan)} m${Math.abs(meas - plan) > 25 ? ' – größere Abweichung, die Positionen können etwas daneben liegen.' : '.'} Möbel lassen sich im Plan verschieben und am ⟳-Griff drehen.</p>
     <div class="actions"><button class="pri" data-act="close">OK</button><button data-act="reconUndo">↶ Rückgängig</button></div>`);
 }
@@ -1899,7 +1934,8 @@ function openFurnStart(r) {
   const P = innerPts(r), n = P.length;
   openModal('🛋 Möbel mit Kamera erfassen', `<p class="hint">Damit die App weiß, wo du im Raum stehst, tippst du zuerst zwei Ecken einer Wand an. Wähle eine Wand, deren beide Bodenecken gut sichtbar sind (Nummern siehe Plan):</p>
     <div class="oplist">${r.pts.map((_, i) => `<button data-act="arFurnGo" data-e="${i}"><span>${edgeName(r, i)} · Ecke ${i + 1} → ${(i + 1) % n + 1}</span><small>${fmtM(dist(P[i], P[(i + 1) % n]))} m ›</small></button>`).join('')}</div>
-    <p class="hint">Danach Kamera auf die Möbel richten und „🔍 Erkennen“ tippen. Möbel außerhalb des Raums werden ignoriert.</p>`);
+    <p class="hint">Danach Kamera auf die Möbel richten und „🔍 Erkennen“ tippen. Landet ein Möbel rechnerisch außerhalb, wird es an die nächste Wand geschoben.</p>`);
+  preloadDetector();
 }
 function arApply() {
   const res = arResult; if (!res) return;
@@ -1922,7 +1958,7 @@ function arApply() {
   });
   const ax = r.x - Math.min(...f.outer.map(p => p.x)), ay = r.y - Math.min(...f.outer.map(p => p.y));
   let added = 0;
-  for (const fu of f.furn) { const it = makeItem(fu.ci, fu.x + ax, fu.y + ay, fu.b); if (!pointInPoly(r.pts, it.x, it.y)) continue; snapItemToWall(it, r); S.items.push(it); added++; }
+  for (const fu of f.furn) { const it = makeItem(fu.ci, fu.x + ax, fu.y + ay, fu.b, fu.dims); placeInRoom(it, r); S.items.push(it); added++; }
   sel = {t:'room', id:r.id}; arResult = null; closeModal(); fit(); changed(true);
   toast(added ? `Raum mit ${added} Möbeln übernommen – alles lässt sich noch verschieben` : 'Raum übernommen – Ecken lassen sich im Plan noch verschieben');
 }
@@ -2036,7 +2072,10 @@ function photoGeom(m, box, nw, nh) {
   const D = clamp(ang > .03 ? 140 / Math.tan(ang) : 350, 60, 900);
   const yaw = Math.atan(((box.xmin + box.xmax)/2 - .5)*2*Math.tan(fx/2)), a = m.pin.dir*Math.PI/180 + yaw;
   const W = (box.xmax - box.xmin)*2*Math.tan(fx/2)*D;
-  return {x:m.pin.x + Math.cos(a)*D, y:m.pin.y + Math.sin(a)*D, b:{x:Math.cos(a), y:Math.sin(a)}, W};
+  const out = {x:m.pin.x + Math.cos(a)*D, y:m.pin.y + Math.sin(a)*D, b:{x:Math.cos(a), y:Math.sin(a)}, W};
+  const angT = Math.atan((box.ymin - .5)*2*Math.tan(fy/2));
+  if (angT > .03) { const Dt = clamp(140 / Math.tan(angT), D, 1200); out.rugD = Dt - D; out.rugMid = {x:m.pin.x + Math.cos(a)*(D + Dt)/2, y:m.pin.y + Math.sin(a)*(D + Dt)/2}; }
+  return out;
 }
 function detApply() {
   const r = find('room', vt.m.room); if (!r) return toast('Foto gehört zu keinem Raum');
@@ -2045,13 +2084,14 @@ function detApply() {
   let skipped = 0, n = 0, k = -(sel_.reduce((t, d) => t + CAT[d.ci].w + 30, 0) - 30)/2;
   for (const d of vt.dets.filter(d => d.on)) {
     const c = CAT[d.ci]; let it;
-    if (d.g) it = makeItem(d.ci, d.g.x + d.g.b.x*c.d/2, d.g.y + d.g.b.y*c.d/2, d.g.b);
+    if (d.g && d.cat.k === 'rug' && d.g.rugMid) it = makeItem(d.ci, d.g.rugMid.x, d.g.rugMid.y, d.g.b, {w:Math.max(40, snap(d.g.W)), d:Math.max(40, snap(d.g.rugD))});
+    else if (d.g) it = makeItem(d.ci, d.g.x + d.g.b.x*c.d/2, d.g.y + d.g.b.y*c.d/2, d.g.b);
     else { it = makeItem(d.ci, lp.x + k + c.w/2, lp.y, {x:0, y:-1}); k += c.w + 30; }
-    if (!pointInPoly(r.pts, it.x, it.y)) { if (d.g) { skipped++; continue; } it.x = lp.x; it.y = lp.y; }
-    if (d.g) snapItemToWall(it, r); S.items.push(it); n++;
+    if (d.g) { if (!pointInPoly(r.pts, it.x, it.y)) skipped++; placeInRoom(it, r); } else if (!pointInPoly(r.pts, it.x, it.y)) { it.x = lp.x; it.y = lp.y; }
+    S.items.push(it); n++;
   }
   S.items.slice(-n).forEach(it => fitInRoom(it, r, false));
-  changed(); toast(`${n} Möbel in „${r.name}“ gestellt${skipped ? `, ${skipped} lagen außerhalb` : ''} – im Plan verschieben/drehen, falls nötig`);
+  changed(); toast(`${n} Möbel in „${r.name}“ gestellt${skipped ? ` (${skipped} an die Wand gerückt)` : ''} – im Plan verschieben/drehen, falls nötig`);
   vt.dets.forEach(d => d.on = false); vtDraw(); vtPanel();
 }
 function vtAct(act, b) {
