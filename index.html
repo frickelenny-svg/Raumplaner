@@ -2539,7 +2539,40 @@ let raf = 0, last = 0;
 function loop(t) { raf = requestAnimationFrame(loop); const dt = Math.min(.05, (t - last)/1000 || 0); last = t; if (isFly()) stepWalk(dt); else placeOrbit(); if (mode === '3d') { for (const g of sideGroups) { const u = g.userData; g.visible = u.ox*(camera.position.x - u.cx) + u.oz*(camera.position.z - u.cz) < 0; } } renderer.render(scene, camera); }
 
 /* ================= Modus ================= */
+// Wo schaut man gerade hin? (Plan-Koordinaten in cm, Blickrichtung, sichtbare Größe) – für nahtlose Wechsel
+function viewFocus() {
+  if (mode === '2d') { const r = svg.getBoundingClientRect(); return {x:V.cx, y:V.cy, yaw:0, span:Math.min(r.width || 400, r.height || 600)/V.s, from:'2d'}; }
+  if (mode === '3d' && cam3 === 'orbit') return {x:O.tx*100, y:O.tz*100, yaw:O.th, span:O.r*120, ph:O.ph, from:'orbit'};
+  const d = camera.getWorldDirection(new THREE.Vector3()), fly = {x:Wk.x, z:Wk.z, eye:mode === 'walk' ? 1.62 : Wk.eye, yaw:Wk.yaw, pitch:Wk.pitch};
+  let x = Wk.x, z = Wk.z;
+  if (mode === '3d' && d.y < -.15) { const t = Math.min(15, fly.eye / -d.y); x += d.x*t; z += d.z*t; }
+  return {x:x*100, y:z*100, yaw:Wk.yaw, span:mode === 'walk' ? 700 : Math.max(400, fly.eye*170), fly, from:mode};
+}
+function insideRoomPoint(x, y) {
+  if (roomAt(x, y) || !S.rooms.length) return {x, y};
+  let best = null;
+  for (const r of S.rooms) { const lp = labelPoint(r), d = Math.hypot(lp.x - x, lp.y - y); if (!best || d < best.d) best = {d, ...lp}; }
+  return {x:best.x, y:best.y};
+}
+function applyFocus(f, m) {
+  if (!f) return;
+  if (m === '2d') {
+    requestAnimationFrame(() => { const r = svg.getBoundingClientRect(); V.cx = f.x; V.cy = f.y; V.s = clamp(Math.min(r.width, r.height) / f.span, .08, 6); renderPlan(); });
+    return;
+  }
+  if (m === '3d') {
+    if (cam3 === 'free' && f.fly) { Object.assign(Wk, {x:f.fly.x, z:f.fly.z, eye:f.fly.eye, yaw:f.fly.yaw, pitch:f.fly.pitch}); camera.rotation.order = 'YXZ'; return; }
+    O.tx = f.x/100; O.tz = f.y/100; O.th = f.yaw; O.r = clamp(f.span/120, 2, 60);
+    O.ph = f.from === '2d' ? .7 : f.from === 'walk' ? 1.05 : (f.ph ?? .95);
+    placeOrbit(); if (cam3 === 'free') camToFly();
+    return;
+  }
+  // Laufen: an dieselbe Stelle (falls außerhalb eines Raums: in den nächsten Raum), gleiche Blickrichtung
+  const src = f.fly ? {x:f.fly.x*100, y:f.fly.z*100} : f, q = insideRoomPoint(src.x, src.y);
+  Wk.x = q.x/100; Wk.z = q.y/100; Wk.yaw = f.yaw; Wk.pitch = f.fly ? clamp(f.fly.pitch, -1.2, 1.2) : 0; camera.rotation.order = 'YXZ';
+}
 function setMode(m) {
+  const focus = m !== mode ? viewFocus() : null;
   mode = m;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
   const is3 = m !== '2d';
@@ -2550,10 +2583,10 @@ function setMode(m) {
   cancelAnimationFrame(raf);
   if (is3) {
     build3D(); resize3D();
-    if (m === 'walk') { segCache = S.rooms.flatMap(wallSegs); startWalk(); }
-    else { const B = bounds(); O.tx = B.cx/100; O.tz = B.cy/100; O.r = Math.max(6, Math.max(B.w, B.h)/100*1.4); placeOrbit(); if (cam3 === 'free') camToFly(); c3UI(); }
+    if (m === 'walk') { segCache = S.rooms.flatMap(wallSegs); camera.rotation.order = 'YXZ'; if (focus) applyFocus(focus, 'walk'); else startWalk(); }
+    else { if (focus) applyFocus(focus, '3d'); else { const B = bounds(); O.tx = B.cx/100; O.tz = B.cy/100; O.r = Math.max(6, Math.max(B.w, B.h)/100*1.4); placeOrbit(); if (cam3 === 'free') camToFly(); } c3UI(); }
     last = 0; raf = requestAnimationFrame(loop);
-  } else requestAnimationFrame(() => renderPlan());
+  } else if (focus) applyFocus(focus, '2d'); else requestAnimationFrame(() => renderPlan());
 }
 $('#tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setMode(b.dataset.m); });
 addEventListener('resize', () => { if (mode === '2d') renderPlan(); else resize3D(); });
