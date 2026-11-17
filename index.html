@@ -11,6 +11,9 @@
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
 #app{display:flex;flex-direction:column;height:100%}
 header{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--panel);border-bottom:1px solid var(--line)}
+.undo{display:flex;gap:4px}
+.undo button{padding:6px 10px;font-size:17px;line-height:1}
+.undo button:disabled{opacity:.35}
 header h1{font-size:16px;margin:0 auto 0 0;font-weight:700;letter-spacing:-.01em}
 .seg{display:flex;background:#eeebe4;border-radius:10px;padding:3px}
 .seg button{border:0;background:transparent;padding:6px 13px;border-radius:8px;font:inherit;font-size:14px;color:var(--mut)}
@@ -99,6 +102,9 @@ textarea{width:100%;height:150px;font:12px ui-monospace,monospace;border:1px sol
 .rotrow{display:flex;gap:10px;align-items:center;margin:4px 0}
 .rotrow input{flex:1}
 .rotrow b{min-width:44px;text-align:right}
+.wrow{display:flex;gap:3px;margin-top:3px}
+.wrow input{margin:0}
+.wrow button{padding:4px 6px;font-size:14px}
 .walls{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0}
 .arlist{width:100%;max-height:22vh;overflow:auto;display:flex;flex-direction:column;gap:4px;margin-bottom:4px}
 .arlist div{display:flex;align-items:center;gap:8px;background:#0008;border-radius:8px;padding:4px 4px 4px 10px;font-size:14px}
@@ -125,6 +131,7 @@ a{color:var(--acc)}
 <div id="app">
   <header>
     <h1>Raumplaner</h1>
+    <div class="undo"><button id="undoB" data-act="undo" disabled aria-label="Rückgängig">↶</button><button id="redoB" data-act="redo" disabled aria-label="Wiederholen">↷</button></div>
     <div class="seg" id="tabs"><button data-m="2d" class="on">2D</button><button data-m="3d">3D</button><button data-m="walk">Laufen</button></div>
   </header>
   <div id="stage">
@@ -321,6 +328,7 @@ const DB = (() => {
     async put(id, blob) { try { await tx('readwrite', s => s.put(blob, id)); } catch (e) { mem.set(id, blob); if (!warned) { warned = true; toast('Fotos werden nur für diese Sitzung gehalten'); } } },
     async get(id) { if (mem.has(id)) return mem.get(id); try { return await tx('readonly', s => s.get(id)); } catch (e) { return null; } },
     async del(id) { mem.delete(id); try { await tx('readwrite', s => s.delete(id)); } catch (e) {} },
+    async keys() { try { return await tx('readonly', s => s.getAllKeys()); } catch (e) { return []; } },
   };
 })();
 const urls = {};
@@ -497,9 +505,31 @@ function load() {
   return defaults();
 }
 let saveT;
-function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Speichern fehlgeschlagen'); } }, 300); }
+// Jede gespeicherte Änderung wird ein Rückgängig-Schritt (Gesten/Tippen werden über die Verzögerung zusammengefasst)
+const undoStack = [], redoStack = []; let lastSnap = null;
+function persist(cur) { try { localStorage.setItem(KEY, cur); } catch (e) { toast('Speichern fehlgeschlagen'); } }
+function save() {
+  clearTimeout(saveT);
+  saveT = setTimeout(() => {
+    const cur = JSON.stringify(S);
+    if (lastSnap != null && cur !== lastSnap) { undoStack.push(lastSnap); if (undoStack.length > 50) undoStack.shift(); redoStack.length = 0; }
+    lastSnap = cur; persist(cur); undoUI();
+  }, 300);
+}
+function flushSave() { if (saveT) { clearTimeout(saveT); const cur = JSON.stringify(S); if (lastSnap != null && cur !== lastSnap) { undoStack.push(lastSnap); redoStack.length = 0; } lastSnap = cur; persist(cur); } }
+function undoUI() { const u = document.getElementById('undoB'), r = document.getElementById('redoB'); if (u) u.disabled = !undoStack.length; if (r) r.disabled = !redoStack.length; }
+function restoreSnap(snap) {
+  S = migrate(JSON.parse(snap)); lastSnap = snap; persist(snap);
+  if (sel && !find(sel.t, sel.id)) sel = null; selVtx = null;
+  renderPlan(); renderProps(); if (mode !== '2d') build3D();
+  if (S.bg?.mid) mediaURL(S.bg.mid).then(u => { bgURL = u; renderPlan(); }); else bgURL = '';
+  undoUI();
+}
+function undo() { flushSave(); if (!undoStack.length) return toast('Nichts zum Rückgängigmachen'); redoStack.push(lastSnap); restoreSnap(undoStack.pop()); toast('Rückgängig'); }
+function redo() { flushSave(); if (!redoStack.length) return; undoStack.push(lastSnap); restoreSnap(redoStack.pop()); toast('Wiederholt'); }
+function resetHistory() { undoStack.length = 0; redoStack.length = 0; lastSnap = JSON.stringify(S); undoUI(); }
 
-let S = load(); save();
+let S = load(); lastSnap = JSON.stringify(S); persist(lastSnap);
 let sel = null;           // {t:'room'|'item'|'open'|'pin', id}
 let selVtx = null;        // {room, i}
 let mode = '2d';
@@ -994,9 +1024,9 @@ function renderProps() {
     P.innerHTML = `<input class="name" data-k="name" value="${esc(o.name)}">
       <div class="g2">${num('h', 'Raumhöhe (cm)', o.h)}<p class="hint" style="align-self:end">${n} Ecken · ${area} m² Fläche</p></div>
       <div class="sub">Wände – Innenmaß in cm</div>
-      <div class="walls">${o.pts.map((_, i) => `<label>Wand ${i + 1}<input type="number" inputmode="decimal" data-wall="${i}" value="${Math.round(innerLen(o, i))}"></label>`).join('')}</div>
+      <div class="walls">${o.pts.map((_, i) => `<label>Wand ${i + 1}<span class="wrow"><input type="number" inputmode="decimal" data-wall="${i}" value="${Math.round(innerLen(o, i))}"><button data-act="wallAR" data-i="${i}" aria-label="Wand ${i + 1} mit Kamera messen">📐</button></span></label>`).join('')}</div>
       ${vs ? `<div class="bar" style="margin-top:8px"><b style="flex:1">Ecke ${vs.i + 1} ausgewählt</b><button class="danger" data-act="delVtx">Ecke löschen</button></div>` : ''}
-      <p class="hint">Ecken im Plan ziehen (rasten gerade zur Nachbarecke ein). „+“ auf einer Wand fügt eine Ecke ein, Ecke antippen zum Löschen. Wandlänge ändern verschiebt alles hinter dem Wandende.</p>
+      <p class="hint">Ecken im Plan ziehen (rasten gerade zur Nachbarecke ein). „+“ auf einer Wand fügt eine Ecke ein, Ecke antippen zum Löschen. Wandlänge ändern verschiebt alles hinter dem Wandende. 📐 misst eine einzelne Wand mit der Kamera nach.</p>
       <div class="sub">Ausrichtung</div>
       <div class="rotrow"><input type="range" id="rang" min="0" max="359" step="1" value="${Math.round(o.ang || 0)}"><b id="rangv">${Math.round(o.ang || 0)}°</b></div>
       <div class="g4"><button data-act="rrot" data-v="-90">↺ 90°</button><button data-act="rrot" data-v="-15">↺ 15°</button><button data-act="rrot" data-v="15">↻ 15°</button><button data-act="rrot" data-v="90">↻ 90°</button></div>
@@ -1099,7 +1129,7 @@ document.addEventListener('click', e => {
     case 'toWall': if (o) { toWall(o); changed(true); } break;
     case 'dup': if (o) { const c = structuredClone(o); c.id = uid(); c.x += 20; c.y += 20; fitInRoom(c, roomAt(o.x, o.y), false); S.items.push(c); sel = {t:'item', id:c.id}; changed(true); } break;
     case 'del': if (o) {
-      if (sel.t === 'room') { S.rooms = S.rooms.filter(r => r !== o); S.media.filter(m => m.room === o.id).forEach(m => DB.del(m.id)); S.media = S.media.filter(m => m.room !== o.id); }
+      if (sel.t === 'room') { S.rooms = S.rooms.filter(r => r !== o); S.media = S.media.filter(m => m.room !== o.id); }
       else S.items = S.items.filter(i => i !== o);
       sel = null; changed(true);
     } break;
@@ -1111,13 +1141,13 @@ document.addEventListener('click', e => {
     case 'photoRoom': openPhotos(b.dataset.id); break;
     case 'view': openViewer(+b.dataset.i); break;
     case 'vnav': openViewer(+b.dataset.i); break;
-    case 'delMedia': { const id = b.dataset.id; DB.del(id); if (urls[id]) URL.revokeObjectURL(urls[id]); delete urls[id]; S.media = S.media.filter(m => m.id !== id); save(); renderPlan(); openPhotos(); break; }
+    case 'delMedia': { const id = b.dataset.id; S.media = S.media.filter(m => m.id !== id); save(); renderPlan(); openPhotos(); break; }
     case 'pin': { const m = find('pin', b.dataset.id); closeModal(); setMode('2d'); planMode = 'pin'; pinTarget = m; showBanner('Tippe dort, wo du beim Foto standest – und zieh in Blickrichtung.', 'Abbrechen'); break; }
     case 'unpin': { const m = find('pin', b.dataset.id); m.pin = null; save(); renderPlan(); openViewerFor(m); break; }
     case 'compare': closeModal(); startCompare(find('pin', b.dataset.id)); break;
     case 'comparePick': openComparePick(); break;
     case 'ovClose': $('#ov').hidden = true; $('#ovbar').hidden = true; $('#whint').hidden = false; break;
-    case 'bgDel': if (S.bg) DB.del(S.bg.mid); S.bg = null; bgURL = ''; save(); renderPlan(); openPhotos(); break;
+    case 'bgDel': S.bg = null; bgURL = ''; save(); renderPlan(); openPhotos(); break;
     case 'bgCalib': closeModal(); setMode('2d'); planMode = 'calib'; calib = []; showBanner('Tippe zwei Punkte einer Strecke, deren echte Länge du kennst (z. B. eine Wand).', 'Abbrechen'); renderPlan(); break;
     case 'bgMove': closeModal(); setMode('2d'); planMode = 'bgmove'; showBanner('Zieh den Grundriss an die richtige Stelle.'); renderPlan(); break;
     case 'calibOk': {
@@ -1131,7 +1161,10 @@ document.addEventListener('click', e => {
     case 'reconToggle': { const id = b.dataset.id, k = reconSel.indexOf(id); if (k >= 0) reconSel.splice(k, 1); else if (reconSel.length < Math.min(sampleImgs?.maxCount || 6, 10)) reconSel.push(id); else toast('Maximal ' + Math.min(sampleImgs?.maxCount || 6, 10) + ' Fotos'); const r = find('room', phRoom); if (r) r.known = $('#rknown')?.value || r.known; openRecon(); break; }
     case 'reconGo': runRecon(); break;
     case 'reconStop': reconCtl?.abort(); break;
-    case 'reconUndo': if (reconUndo) { S = JSON.parse(reconUndo); reconUndo = null; sel = null; save(); closeModal(); fit(); changed(true); toast('Rückgängig gemacht'); } break;
+    case 'reconUndo': closeModal(); undo(); fit(); renderPlan(); break;
+    case 'undo': undo(); break;
+    case 'bkOut': exportBackup(); break;
+    case 'redo': redo(); break;
     case 'to3d': closeModal(); setMode('3d'); break;
     case 'rrot': if (o && sel.t === 'room') { rotateRoom(o, rotBase(o), +b.dataset.v); changed(true); } break;
     case 'ralign': if (o && sel.t === 'room') {
@@ -1141,6 +1174,7 @@ document.addEventListener('click', e => {
       rotateRoom(o, rotBase(o), d); changed(true);
     } break;
     case 'delVtx': if (o && selVtx && sel.t === 'room') { const kids = S.items.filter(it => roomAt(it.x, it.y) === o); removeVertex(o, selVtx.i); selVtx = null; fixOrientation(o); kids.forEach(it => fitInRoom(it, o, false)); changed(true); } break;
+    case 'wallAR': if (o && sel.t === 'room') closeModal(), startAR(o.id, {mode:'wall', edge:+b.dataset.i}); break;
     case 'arFurnStart': if (o && sel.t === 'room') openFurnStart(o); break;
     case 'arFurnGo': if (o && sel.t === 'room') { closeModal(); startAR(o.id, {mode:'furn', edge:+b.dataset.e}); } break;
     case 'arStart': if (sel && sel.t === 'room') startAR(sel.id); else startAR(null); break;
@@ -1150,8 +1184,8 @@ document.addEventListener('click', e => {
     case 'vtMode': case 'vtReset': case 'vtUndo': case 'vtPreset': case 'pipTo': case 'detApply': vtAct(act, b); break;
     case 'data': openData(); break;
     case 'copy': navigator.clipboard.writeText($('#json').value).then(() => toast('Kopiert'), () => { $('#json').select(); toast('Bitte manuell kopieren'); }); break;
-    case 'import': try { const d = JSON.parse($('#json').value); if (!d.rooms) throw 0; S = migrate(d); sel = null; save(); closeModal(); fit(); changed(true); toast('Importiert'); } catch (er) { toast('Ungültige Daten'); } break;
-    case 'reset': if (b.dataset.sure) { S.media.forEach(m => DB.del(m.id)); S = defaults(); sel = null; bgURL = ''; save(); closeModal(); fit(); changed(true); } else { b.dataset.sure = 1; b.textContent = 'Wirklich alles löschen?'; } break;
+    case 'import': try { const d = JSON.parse($('#json').value); if (!d.rooms) throw 0; S = migrate(d); sel = null; save(); closeModal(); fit(); changed(true); toast('Importiert – mit ↶ rückgängig machbar'); } catch (er) { toast('Ungültige Daten'); } break;
+    case 'reset': if (b.dataset.sure) { S = defaults(); sel = null; bgURL = ''; resetHistory(); persist(lastSnap); gcMedia(); closeModal(); fit(); changed(true); } else { b.dataset.sure = 1; b.textContent = 'Wirklich alles löschen?'; } break;
   }
 });
 function addItem(c) {
@@ -1262,7 +1296,6 @@ async function addFiles(files) {
 async function setBg(file) {
   let blob, ratio;
   try { ({blob, ratio} = await shrink(file, 2600, .85)); } catch (e) { return toast('Dieses Bildformat kann der Browser nicht lesen – bitte als JPG/PNG versuchen'); }
-  if (S.bg?.mid) DB.del(S.bg.mid);
   const id = uid(); await DB.put(id, blob);
   const B = bounds(); S.bg = {mid:id, ratio, x:B.x, y:B.y, w:Math.max(B.w, 800), op:.55};
   bgURL = await mediaURL(id); save(); renderPlan(); openPhotos();
@@ -1289,12 +1322,53 @@ async function startCompare(m) {
 $('#ar').addEventListener('beforexrselect', e => { if (e.target.closest('button,input,select')) e.preventDefault(); });
 $('#ovop').addEventListener('input', e => $('#ov').style.opacity = e.target.value);
 
+// Medien, die von nichts mehr benutzt werden, beim Start aufräumen (erst dann, damit Rückgängig sie noch findet)
+async function gcMedia() {
+  const used = new Set([...S.media.map(m => m.id), S.bg?.mid].filter(Boolean));
+  for (const k of await DB.keys()) if (!used.has(k)) DB.del(k);
+}
+setTimeout(gcMedia, 4000);
+const blobTo64 = b => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(b); });
+async function exportBackup() {
+  flushSave();
+  const ids = [...S.media.map(m => m.id), S.bg?.mid].filter(Boolean), parts = ['{"app":"raumplaner","v":2,"date":', JSON.stringify(new Date().toISOString()), ',"state":', JSON.stringify(S), ',"media":{'];
+  let n = 0, miss = 0;
+  for (const id of ids) {
+    const b = await DB.get(id); if (!b) { miss++; continue; }
+    parts.push((n ? ',' : '') + JSON.stringify(id) + ':' + JSON.stringify(await blobTo64(b))); n++;
+    const el = $('#bkst'); if (el) el.textContent = `Fotos/Videos werden eingepackt … ${n}/${ids.length}`;
+  }
+  parts.push('}}');
+  const blob = new Blob(parts, {type:'application/json'}), url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = `raumplaner-backup-${new Date().toISOString().slice(0, 10)}.json`; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  const el = $('#bkst'); if (el) el.textContent = `Backup erstellt: ${S.rooms.length} Räume, ${S.items.length} Möbel, ${n} Fotos/Videos (${(blob.size/1048576).toFixed(1).replace('.', ',')} MB).${miss ? ` ${miss} Medien fehlten im Speicher.` : ''}${inFrame ? ' Hinweis: In der eingebetteten Ansicht sind Downloads gesperrt – nutze die Vercel-Adresse.' : ''}`;
+}
+async function importBackup(file) {
+  const el = $('#bkst'); if (el) el.textContent = 'Backup wird gelesen …';
+  try {
+    const d = JSON.parse(await file.text());
+    if (d.app !== 'raumplaner' || !d.state?.rooms) throw new Error('Keine Raumplaner-Backup-Datei');
+    const ids = Object.keys(d.media || {}); let n = 0;
+    for (const id of ids) { await DB.put(id, dataURLtoBlob(d.media[id])); n++; if (el) el.textContent = `Fotos/Videos werden wiederhergestellt … ${n}/${ids.length}`; }
+    flushSave();
+    for (const k of Object.keys(urls)) { URL.revokeObjectURL(urls[k]); delete urls[k]; }
+    S = migrate(d.state); sel = null; save();
+    bgURL = S.bg?.mid ? await mediaURL(S.bg.mid) : '';
+    closeModal(); fit(); changed(true); toast(`Backup geladen: ${S.rooms.length} Räume, ${n} Fotos/Videos – mit ↶ rückgängig machbar`);
+  } catch (e) { if (el) el.textContent = 'Laden fehlgeschlagen: ' + (e.message || e); }
+}
 function openData() {
   const data = JSON.stringify(S);
   openModal('Daten sichern', `
-    <p class="hint">Alles wird automatisch in diesem Browser gespeichert. Zum Sichern oder Übertragen: Text kopieren und auf dem anderen Gerät einfügen. Fotos und Videos sind darin nicht enthalten.</p>
+    <p class="hint">Alles liegt nur in diesem Browser. Löschst du die Browserdaten oder wechselst das Handy, ist es weg – deshalb ab und zu ein Backup machen (z. B. in Google Drive speichern).</p>
+    <div class="sub">Komplettes Backup (mit Fotos & Videos)</div>
+    <div class="actions" style="margin-top:4px"><button class="pri" data-act="bkOut">⬇ Backup herunterladen</button><label class="btn">⬆ Backup laden<input type="file" class="vh" id="bkIn" accept=".json,application/json"></label></div>
+    <p class="hint" id="bkst"></p>
+    <div class="sub">Nur Pläne als Text (ohne Fotos)</div>
     <textarea id="json">${esc(data)}</textarea>
-    <div class="actions"><button class="pri" data-act="copy">Kopieren</button><button data-act="import">Eingefügten Text laden</button><button class="danger" data-act="reset">Neu anfangen</button></div>`);
+    <div class="actions"><button data-act="copy">Kopieren</button><button data-act="import">Eingefügten Text laden</button><button class="danger" data-act="reset">Neu anfangen</button></div>`);
+  $('#bkIn').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) importBackup(f); });
 }
 
 /* ================= Raum aus Fotos nachbauen (Claude) ================= */
@@ -1391,7 +1465,7 @@ async function runRecon() {
     const j = await sampleFn.json(reconPrompt(r.known, imgs.length), {images:imgs, modelTier:'complex', signal:reconCtl.signal,
       onText: () => { const el = $('#rstat'); if (el) el.textContent = 'Claude schreibt das Raummodell …'; }});
     if (!j || typeof j !== 'object' || !(+j.w > 0)) throw {code:'invalid_json'};
-    reconUndo = JSON.stringify(S);
+    flushSave();
     const stats = applyRecon(r, j, repl);
     clearInterval(tick);
     sel = {t:'room', id:r.id}; fit(); changed(true);
@@ -1564,6 +1638,7 @@ function arUnsupported() {
 async function startAR(rid, opts = {}) {
   if (!arOK) return arUnsupported();
   if (opts.mode === 'furn') preloadDetector();
+  if (opts.mode === 'wall') { const r = find('room', rid); if (!r) return; }
   const root = $('#ar'); root.hidden = false;
   let session;
   try { session = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay', 'camera-access', 'anchors'], domOverlay:{root}}); }
@@ -1578,7 +1653,7 @@ async function startAR(rid, opts = {}) {
   const live = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({color:0xffd166}));
   live.visible = false; scene.add(live);
   ar = {session, ren, scene, reticle, marks, live, cur:null, real:false, method:'corner', corners:[], walls:[], wpend:null, ops:[], pending:null, kind:'window', phase:'corners', floorY:null, done:false, rid, furn:[], detBusy:false, captureCb:null, camOK:null, detMsg:'', mode:opts.mode || 'room', edge:opts.edge ?? 0, align:[], anchorQ:[], lastRd:0};
-  if (ar.mode === 'furn') ar.phase = 'align';
+  if (ar.mode === 'furn' || ar.mode === 'wall') ar.phase = 'align';
   await ren.xr.setSession(session);
   const viewer = await session.requestReferenceSpace('viewer');
   const hts = await session.requestHitTestSource({space:viewer});
@@ -1781,8 +1856,15 @@ function arUI() {
   }
   if (ar.phase === 'align') {
     const r = find('room', ar.rid), n = r ? r.pts.length : 0, c1 = ar.edge + 1, c2 = (ar.edge + 1) % n + 1;
-    msg ||= ar.align.length === 0 ? `Zuerst den Raum zuordnen: Ziele auf die Bodenecke ${c1} (Anfang von Wand ${ar.edge + 1}, siehe Nummern im Plan) und tippe „＋ Ecke“.` : `Jetzt Bodenecke ${c2} am Ende von Wand ${ar.edge + 1}.`;
-    btns = `<button data-act="arUndo" ${ar.align.length ? '' : 'disabled'}>↶</button><button class="pri big" data-act="arAdd">＋ Ecke ${ar.align.length ? c2 : c1}</button>`;
+    if (ar.mode === 'wall' && ar.align.length === 2) {
+      const L = Math.hypot(ar.align[1].x - ar.align[0].x, ar.align[1].z - ar.align[0].z)*100;
+      msg = `Wand ${ar.edge + 1} gemessen: ${fmtM(L)} m (bisher ${fmtM(innerLen(r, ar.edge))} m). Übernehmen?`;
+      btns = `<button data-act="arUndo">↶ Neu</button><button class="pri big" data-act="arFinish">✓ Übernehmen</button>`;
+    } else {
+      msg ||= ar.mode === 'wall' ? (ar.align.length === 0 ? `Wand ${ar.edge + 1} nachmessen: Ziele auf die Bodenecke ${c1} (Anfang der Wand, siehe Nummern im Plan) und tippe „＋ Ecke“.` : `Jetzt Bodenecke ${c2} am anderen Ende der Wand.`)
+        : ar.align.length === 0 ? `Zuerst den Raum zuordnen: Ziele auf die Bodenecke ${c1} (Anfang von Wand ${ar.edge + 1}, siehe Nummern im Plan) und tippe „＋ Ecke“.` : `Jetzt Bodenecke ${c2} am Ende von Wand ${ar.edge + 1}.`;
+      btns = `<button data-act="arUndo" ${ar.align.length ? '' : 'disabled'}>↶</button><button class="pri big" data-act="arAdd">＋ Ecke ${ar.align.length ? c2 : c1}</button>`;
+    }
   }
   if (ar.phase === 'furn') {
     msg = ar.detBusy ? ar.detMsg : `Richte die Kamera auf Möbel (ganz im Bild, inkl. Unterkante) und tippe „Erkennen“. ${ar.detMsg || ''}`;
@@ -1799,7 +1881,8 @@ function arAdd() {
   if (ar.phase === 'align') {
     if (ar.align.length && Math.hypot(p.x - ar.align[0].x, p.z - ar.align[0].z) < .3) return toast('Die zweite Ecke liegt zu nah an der ersten');
     ar.align.push(anch(p));
-    if (ar.align.length === 2) arAct('arToFurn');
+    if (ar.align.length === 2 && ar.mode === 'furn') arAct('arToFurn');
+    if (ar.align.length > 2) ar.align.length = 2;
   } else if (ar.phase === 'corners') {
     if (ar.method === 'corner') ar.corners.push(anch(p));
     else if (!ar.wpend) ar.wpend = anch(p);
@@ -1837,6 +1920,7 @@ function arEnded() {
   st.ren.setAnimationLoop(null); st.ren.dispose(); st.ren.domElement.remove();
   $('#ar').hidden = true;
   if (st.mode === 'furn') { if (st.done) applyFurnToRoom(st); return; }
+  if (st.mode === 'wall') { if (st.done) applyWallMeasure(st); return; }
   ar = st; const C = arCorners(); ar = null;
   if (st.done && C.length >= 3) { st.corners = C; arResult = {res:arToRoom(st), rid:st.rid, ortho:true}; showARResult(); }
   else if (st.done) toast('Mindestens 3 Ecken nötig');
@@ -1911,12 +1995,24 @@ function showARResult() {
     <div class="actions"><button class="pri" data-act="arApply">Übernehmen</button><button data-act="arRetry">Neu messen</button><button data-act="close">Verwerfen</button></div>`);
   $('#arortho').addEventListener('change', e => { arResult.ortho = e.target.checked; showARResult(); });
 }
+function applyWallMeasure(st) {
+  const r = find('room', st.rid); if (!r || st.align.length < 2) return toast('Zwei Ecken nötig');
+  const [a, b] = st.align, L = Math.round(Math.hypot(b.x - a.x, b.z - a.z)*1000)/10, before = innerLen(r, st.edge);
+  if (L < 20) return toast('Messung zu kurz – bitte erneut');
+  flushSave();
+  const kids = S.items.filter(it => roomAt(it.x, it.y) === r);
+  stretchWall(r, st.edge, L - before); kids.forEach(it => fitInRoom(it, r, false));
+  sel = {t:'room', id:r.id}; changed(true);
+  openModal('📐 Wand nachgemessen', `<p>Wand ${st.edge + 1}: <b>${fmtM(before)} m → ${fmtM(L)} m</b> (${L - before >= 0 ? '+' : '−'}${Math.abs(Math.round(L - before))} cm)</p>
+    <p class="hint">Alles hinter dem Wandende wurde mitverschoben, Winkel bleiben gleich.</p>
+    <div class="actions"><button class="pri" data-act="close">OK</button><button data-act="reconUndo">↶ Rückgängig</button><button data-act="wallAR" data-i="${st.edge}">Nochmal messen</button></div>`);
+}
 function applyFurnToRoom(st) {
   const r = find('room', st.rid); if (!r || st.align.length < 2) return toast('Raum-Zuordnung fehlt (2 Ecken nötig)');
   const P = innerPts(r), n = P.length, A = P[st.edge % n], B = P[(st.edge + 1) % n];
   const [a1, a2] = st.align, rot = Math.atan2(B.y - A.y, B.x - A.x) - Math.atan2(a2.z - a1.z, a2.x - a1.x), c = Math.cos(rot), s = Math.sin(rot);
   const map = q => ({x:A.x + ((q.x - a1.x)*c - (q.z - a1.z)*s)*100, y:A.y + ((q.x - a1.x)*s + (q.z - a1.z)*c)*100});
-  reconUndo = JSON.stringify(S);
+  flushSave();
   let added = 0, out = 0;
   for (const f of st.furn) {
     const pp = map(f), b = {x:f.bx*c - f.bz*s, y:f.bx*s + f.bz*c}, it = makeItem(f.ci, pp.x, pp.y, b, f.dims);
@@ -1939,7 +2035,7 @@ function openFurnStart(r) {
 }
 function arApply() {
   const res = arResult; if (!res) return;
-  reconUndo = JSON.stringify(S);
+  flushSave();
   const f = finalizeAR(res.res, res.ortho), h = clamp(parseFloat($('#arh').value) || 250, 180, 600), target = $('#art').value;
   let r = target !== 'new' && find('room', target);
   if (!r) {
@@ -2079,7 +2175,7 @@ function photoGeom(m, box, nw, nh) {
 }
 function detApply() {
   const r = find('room', vt.m.room); if (!r) return toast('Foto gehört zu keinem Raum');
-  reconUndo = JSON.stringify(S);
+  flushSave();
   const lp = labelPoint(r), sel_ = vt.dets.filter(d => d.on && !d.g);
   let skipped = 0, n = 0, k = -(sel_.reduce((t, d) => t + CAT[d.ci].w + 30, 0) - 30)/2;
   for (const d of vt.dets.filter(d => d.on)) {
@@ -2353,6 +2449,7 @@ function stepWalk(dt) {
 }
 addEventListener('keydown', e => { if (mode === 'walk' && e.target.tagName !== 'INPUT') { Wk.keys[e.code] = true; if (e.code.startsWith('Arrow')) e.preventDefault(); } });
 addEventListener('keyup', e => { Wk.keys[e.code] = false; });
+addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) { e.preventDefault(); e.shiftKey ? redo() : undo(); } });
 
 const tp = new Map(); let tpinch = null;
 const joy = $('#joy'), knob = $('#knob');
