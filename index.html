@@ -83,7 +83,13 @@ textarea{width:100%;height:150px;font:12px ui-monospace,monospace;border:1px sol
 .wbtns{position:absolute;bottom:12px;right:12px;display:flex;gap:6px;pointer-events:auto;align-items:center}
 .wbtns label{background:#fffd;color:var(--ink);font-size:13px;padding:7px 10px;border-radius:10px;display:flex;gap:6px;align-items:center}
 .wbtns input{width:auto;margin:0}
-#joy{position:absolute;width:110px;height:110px;border-radius:50%;background:#ffffff40;border:2px solid #fff9;display:none;transform:translate(-50%,-50%)}
+#c3ui{position:absolute;inset:0;pointer-events:none}
+.c3top{position:absolute;top:10px;left:0;right:0;display:flex;justify-content:center;pointer-events:auto}
+.c3top .seg{background:#fffd;box-shadow:0 1px 4px #0002}
+.c3hint{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:#000a;color:#fff;font-size:12.5px;padding:5px 12px;border-radius:14px;text-align:center;width:max-content;max-width:90%}
+.updown{position:absolute;right:12px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:10px;pointer-events:auto}
+.updown button{width:54px;height:54px;border-radius:50%;font-size:20px;background:#fffd;box-shadow:0 1px 4px #0003;touch-action:none;user-select:none;-webkit-user-select:none}
+#joy{pointer-events:none;z-index:2;position:absolute;width:110px;height:110px;border-radius:50%;background:#ffffff40;border:2px solid #fff9;display:none;transform:translate(-50%,-50%)}
 #knob{position:absolute;left:50%;top:50%;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;background:#fffc}
 #ov{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;opacity:.5}
 #ovbar{position:absolute;top:46px;left:50%;transform:translateX(-50%);background:#fffe;border-radius:12px;padding:6px 10px;display:flex;gap:8px;align-items:center;pointer-events:auto;font-size:13px;width:min(92%,380px)}
@@ -143,8 +149,13 @@ a{color:var(--acc)}
       <div class="whint" id="whint">Links ziehen: gehen · Rechts ziehen: umsehen</div>
       <div id="ovbar" hidden>Foto <input type="range" id="ovop" min="0" max="1" step="0.05" value="0.5"> <button data-act="ovClose">✕</button></div>
       <div class="wbtns"><button data-act="comparePick">📷 Vergleichen</button><label><input type="checkbox" id="coll" checked> Wände</label></div>
-      <div id="joy"><div id="knob"></div></div>
     </div>
+    <div id="c3ui" hidden>
+      <div class="c3top"><div class="seg"><button data-act="cam3" data-k="orbit" class="on">⟲ Umkreisen</button><button data-act="cam3" data-k="free">✈ Frei bewegen</button></div></div>
+      <div class="c3hint" id="c3hint"></div>
+      <div class="updown" id="updown" hidden><button data-ud="1" aria-label="höher">▲</button><button data-ud="-1" aria-label="tiefer">▼</button></div>
+    </div>
+    <div id="joy"><div id="knob"></div></div>
   </div>
   <div id="sheet">
     <div id="tools">
@@ -1163,6 +1174,7 @@ document.addEventListener('click', e => {
     case 'reconStop': reconCtl?.abort(); break;
     case 'reconUndo': closeModal(); undo(); fit(); renderPlan(); break;
     case 'undo': undo(); break;
+    case 'cam3': if (mode === '3d' && b.dataset.k !== cam3) { cam3 = b.dataset.k; if (cam3 === 'free') camToFly(); else camToOrbit(); c3UI(); } break;
     case 'bkOut': exportBackup(); break;
     case 'redo': redo(); break;
     case 'to3d': closeModal(); setMode('3d'); break;
@@ -2404,7 +2416,6 @@ function build3D() {
   for (const it of S.items) root.add(furn(it));
   scene.add(root);
   scene.background.set(mode === 'walk' ? '#cfe1ec' : '#e9e6df');
-  const B = bounds(); O.tx = B.cx/100; O.tz = B.cy/100;
 }
 function resize3D() {
   if (!renderer) return;
@@ -2416,7 +2427,32 @@ function resize3D() {
 /* Orbit + Laufen */
 const O = {th:.7, ph:.95, r:11, tx:0, tz:0};
 function placeOrbit() { camera.position.set(O.tx + O.r*Math.sin(O.ph)*Math.sin(O.th), O.r*Math.cos(O.ph), O.tz + O.r*Math.sin(O.ph)*Math.cos(O.th)); camera.lookAt(O.tx, .6, O.tz); }
-const Wk = {x:0, z:0, yaw:0, pitch:0, mv:{x:0, y:0}, keys:{}};
+const Wk = {x:0, z:0, yaw:0, pitch:0, mv:{x:0, y:0}, keys:{}, eye:1.62, vy:0};
+let cam3 = 'orbit';
+const isFly = () => mode === 'walk' || (mode === '3d' && cam3 === 'free');
+// aktuelle Kamera → freie Steuerung übernehmen (ohne Sprung)
+function camToFly() {
+  const d = camera.getWorldDirection(new THREE.Vector3());
+  Wk.x = camera.position.x; Wk.z = camera.position.z; Wk.eye = camera.position.y;
+  Wk.yaw = Math.atan2(-d.x, -d.z); Wk.pitch = Math.asin(clamp(d.y, -1, 1)); camera.rotation.order = 'YXZ';
+}
+// freie Kamera → Umkreisen um den Punkt, auf den man gerade schaut
+function camToOrbit() {
+  const d = camera.getWorldDirection(new THREE.Vector3()), p = camera.position;
+  let t = d.y < -.05 ? (.6 - p.y)/d.y : 5; t = clamp(t, 1.5, 40);
+  O.tx = p.x + d.x*t; O.tz = p.z + d.z*t;
+  const rx = p.x - O.tx, ry = p.y - .6, rz = p.z - O.tz, L = Math.hypot(rx, ry, rz) || 1;
+  O.r = clamp(L, 1.5, 60); O.ph = clamp(Math.acos(clamp(ry/L, -1, 1)), .12, 1.48); O.th = Math.atan2(rx, rz);
+}
+function c3UI() {
+  document.querySelectorAll('[data-act=cam3]').forEach(b => b.classList.toggle('on', b.dataset.k === cam3));
+  $('#updown').hidden = cam3 !== 'free';
+  $('#c3hint').textContent = cam3 === 'free' ? 'Links ziehen: bewegen · Rechts ziehen: umsehen · ▲▼ Höhe' : '1 Finger: drehen · 2 Finger: zoomen/verschieben · Doppeltipp: dorthin';
+}
+document.querySelectorAll('[data-ud]').forEach(b => {
+  const on = e => { e.preventDefault(); Wk.vy = +b.dataset.ud; }, off = () => { Wk.vy = 0; };
+  b.addEventListener('pointerdown', on); ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, off));
+});
 function startWalk() {
   const r = (sel && sel.t === 'room' && find('room', sel.id)) || S.rooms[0];
   if (r) { const lp = labelPoint(r); Wk.x = lp.x/100; Wk.z = lp.y/100; }
@@ -2437,33 +2473,46 @@ function stepWalk(dt) {
   const fwd = -Wk.mv.y + ((k.KeyW || k.ArrowUp) ? 1 : 0) - ((k.KeyS || k.ArrowDown) ? 1 : 0);
   const str = Wk.mv.x + (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0);
   if (k.ArrowLeft) Wk.yaw += 1.8*dt; if (k.ArrowRight) Wk.yaw -= 1.8*dt;
-  const sp = 1.5*dt, s = Math.sin(Wk.yaw), c = Math.cos(Wk.yaw);
+  const free = mode !== 'walk', sp = (free ? 2.2 + Wk.eye*.25 : 1.5)*dt, s = Math.sin(Wk.yaw), c = Math.cos(Wk.yaw);
   const dx = (-s*fwd + c*str)*sp, dz = (-c*fwd - s*str)*sp;
-  if (dx || dz) {
+  if (free) {
+    Wk.x += dx; Wk.z += dz;
+    const up = Wk.vy + ((k.KeyE || k.Space) ? 1 : 0) - ((k.KeyQ || k.ShiftLeft) ? 1 : 0);
+    Wk.eye = clamp(Wk.eye + up*(1.2 + Wk.eye*.3)*dt, .2, 40);
+  } else if (dx || dz) {
     if (!blocked((Wk.x + dx)*100, (Wk.z + dz)*100)) { Wk.x += dx; Wk.z += dz; }
     else if (!blocked((Wk.x + dx)*100, Wk.z*100)) Wk.x += dx;
     else if (!blocked(Wk.x*100, (Wk.z + dz)*100)) Wk.z += dz;
   }
-  camera.position.set(Wk.x, 1.62, Wk.z);
+  camera.position.set(Wk.x, free ? Wk.eye : 1.62, Wk.z);
   camera.rotation.set(Wk.pitch, Wk.yaw, 0);
 }
-addEventListener('keydown', e => { if (mode === 'walk' && e.target.tagName !== 'INPUT') { Wk.keys[e.code] = true; if (e.code.startsWith('Arrow')) e.preventDefault(); } });
+addEventListener('keydown', e => { if (isFly() && e.target.tagName !== 'INPUT') { Wk.keys[e.code] = true; if (e.code.startsWith('Arrow')) e.preventDefault(); } });
 addEventListener('keyup', e => { Wk.keys[e.code] = false; });
 addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) { e.preventDefault(); e.shiftKey ? redo() : undo(); } });
 
-const tp = new Map(); let tpinch = null;
+const tp = new Map(); let tpinch = null; const lastTap = {t:0, x:0, y:0};
 const joy = $('#joy'), knob = $('#knob');
 cv.addEventListener('pointerdown', e => {
   cv.setPointerCapture(e.pointerId);
   const r = cv.getBoundingClientRect(), left = e.clientX - r.left < r.width/2;
   tp.set(e.pointerId, {x:e.clientX, y:e.clientY, sx:e.clientX, sy:e.clientY, left});
-  if (mode === 'walk' && left) { joy.style.display = 'block'; joy.style.left = (e.clientX - r.left) + 'px'; joy.style.top = (e.clientY - r.top) + 'px'; }
+  if (mode === '3d' && cam3 === 'orbit' && tp.size === 1) {
+    const now = performance.now();
+    if (now - (lastTap.t || 0) < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+      const rc = new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2((e.clientX - r.left)/r.width*2 - 1, -(e.clientY - r.top)/r.height*2 + 1), camera);
+      const hit = rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+      if (hit) { O.tx = hit.x; O.tz = hit.z; O.r = Math.max(2.5, O.r*.65); }
+      lastTap.t = 0;
+    } else Object.assign(lastTap, {t:now, x:e.clientX, y:e.clientY});
+  }
+  if (isFly() && left) { joy.style.display = 'block'; joy.style.left = (e.clientX - r.left) + 'px'; joy.style.top = (e.clientY - r.top) + 'px'; }
   if (mode === '3d' && tp.size === 2) { const [a, b] = [...tp.values()]; tpinch = {d:dist(a, b), r:O.r, mx:(a.x+b.x)/2, my:(a.y+b.y)/2, tx:O.tx, tz:O.tz}; }
 });
 cv.addEventListener('pointermove', e => {
   const p = tp.get(e.pointerId); if (!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
-  if (mode === 'walk') {
+  if (isFly()) {
     if (p.left) { let jx = (e.clientX - p.sx)/50, jy = (e.clientY - p.sy)/50; const l = Math.hypot(jx, jy); if (l > 1) { jx /= l; jy /= l; } Wk.mv = {x:jx, y:jy}; knob.style.transform = `translate(${jx*32}px,${jy*32}px)`; }
     else { Wk.yaw -= dx*.006; Wk.pitch = clamp(Wk.pitch - dy*.006, -1.2, 1.2); }
     return;
@@ -2478,26 +2527,31 @@ cv.addEventListener('pointermove', e => {
   }
   O.th -= dx*.008; O.ph = clamp(O.ph - dy*.006, .12, 1.48);
 });
-const end3 = e => { const p = tp.get(e.pointerId); tp.delete(e.pointerId); if (tp.size < 2) tpinch = null; if (p && p.left && mode === 'walk') { Wk.mv = {x:0, y:0}; joy.style.display = 'none'; knob.style.transform = ''; } };
+const end3 = e => { const p = tp.get(e.pointerId); tp.delete(e.pointerId); if (tp.size < 2) tpinch = null; if (p && p.left && isFly()) { Wk.mv = {x:0, y:0}; joy.style.display = 'none'; knob.style.transform = ''; } };
 cv.addEventListener('pointerup', end3); cv.addEventListener('pointercancel', end3);
-cv.addEventListener('wheel', e => { e.preventDefault(); if (mode === '3d') O.r = clamp(O.r * Math.exp(e.deltaY*.001), 1.5, 60); }, {passive:false});
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (mode === '3d' && cam3 === 'orbit') O.r = clamp(O.r * Math.exp(e.deltaY*.001), 1.5, 60);
+  else if (mode === '3d') { const k = -e.deltaY*.004, d = camera.getWorldDirection(new THREE.Vector3()); Wk.x += d.x*k; Wk.z += d.z*k; Wk.eye = clamp(Wk.eye + d.y*k, .2, 40); }
+}, {passive:false});
 
 let raf = 0, last = 0;
-function loop(t) { raf = requestAnimationFrame(loop); const dt = Math.min(.05, (t - last)/1000 || 0); last = t; if (mode === 'walk') stepWalk(dt); else { placeOrbit(); for (const g of sideGroups) { const u = g.userData; g.visible = u.ox*(camera.position.x - u.cx) + u.oz*(camera.position.z - u.cz) < 0; } } renderer.render(scene, camera); }
+function loop(t) { raf = requestAnimationFrame(loop); const dt = Math.min(.05, (t - last)/1000 || 0); last = t; if (isFly()) stepWalk(dt); else placeOrbit(); if (mode === '3d') { for (const g of sideGroups) { const u = g.userData; g.visible = u.ox*(camera.position.x - u.cx) + u.oz*(camera.position.z - u.cz) < 0; } } renderer.render(scene, camera); }
 
 /* ================= Modus ================= */
 function setMode(m) {
   mode = m;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
   const is3 = m !== '2d';
-  svg.hidden = is3; cv.hidden = !is3; $('#walkui').hidden = m !== 'walk'; $('#sheet').hidden = m === 'walk';
+  svg.hidden = is3; cv.hidden = !is3; $('#walkui').hidden = m !== 'walk'; $('#sheet').hidden = m === 'walk'; $('#c3ui').hidden = m !== '3d';
+  Wk.mv = {x:0, y:0}; Wk.vy = 0; joy.style.display = 'none';
   if (m !== 'walk') { $('#ov').hidden = true; $('#ovbar').hidden = true; $('#whint').hidden = false; }
   if (is3 && planMode) { planMode = null; hideBanner(); }
   cancelAnimationFrame(raf);
   if (is3) {
     build3D(); resize3D();
     if (m === 'walk') { segCache = S.rooms.flatMap(wallSegs); startWalk(); }
-    else O.r = Math.max(6, Math.max(bounds().w, bounds().h)/100*1.4);
+    else { const B = bounds(); O.tx = B.cx/100; O.tz = B.cy/100; O.r = Math.max(6, Math.max(B.w, B.h)/100*1.4); placeOrbit(); if (cam3 === 'free') camToFly(); c3UI(); }
     last = 0; raf = requestAnimationFrame(loop);
   } else requestAnimationFrame(() => renderPlan());
 }
