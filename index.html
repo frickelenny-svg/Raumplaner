@@ -326,10 +326,14 @@ const CAT = [
   {g:'Treppen', n:'Raumspartreppe', w:65, d:200, h:280, m:{t:'wood', c:'#c09060'}, k:'stairs'},
   {g:'Treppen', n:'Treppe gerade 90', w:90, d:300, h:280, m:{t:'wood', c:'#c09060'}, k:'stairs'},
   {g:'Treppen', n:'Treppe gerade 100', w:100, d:350, h:280, m:{t:'plain', c:'#d9d6cf'}, k:'stairs'},
+  {g:'Treppen', n:'L-Treppe ¼ gewendelt', w:200, d:260, h:280, m:{t:'wood', c:'#c09060'}, k:'stairsL'},
+  {g:'Treppen', n:'Wendeltreppe Ø 140', w:140, d:140, h:280, m:{t:'metal', c:'#2c2d30'}, k:'spiral'},
   {g:'Sonstiges', n:'Waschmaschine', w:60, d:60, h:85, m:{t:'plain', c:'#f4f4f4'}, k:'box'},
   {g:'Sonstiges', n:'Heizkörper 100', w:100, d:10, h:60, e:15, m:{t:'plain', c:'#f4f4f4'}, k:'box'},
 ];
-const KINDS = {box:'Box', table:'Tisch', desk:'Schreibtisch', bed:'Bett', sofa:'Sofa/Sessel', chair:'Stuhl', ochair:'Bürostuhl', shelf:'Regal', cabinet:'Schrank', tv:'Fernseher', lamp:'Lampe', plant:'Pflanze', rug:'Teppich', stairs:'Treppe'};
+const KINDS = {box:'Box', table:'Tisch', desk:'Schreibtisch', bed:'Bett', sofa:'Sofa/Sessel', chair:'Stuhl', ochair:'Bürostuhl', shelf:'Regal', cabinet:'Schrank', tv:'Fernseher', lamp:'Lampe', plant:'Pflanze', rug:'Teppich'};
+const STAIRS = {stairs:'Gerade Treppe', stairsL:'L-Treppe (¼ gewendelt)', spiral:'Wendeltreppe'};
+const isStair = it => !!STAIRS[it?.k];
 
 function toast(m) { const t = $('#toast'); t.textContent = m; t.style.opacity = 1; clearTimeout(t._t); t._t = setTimeout(() => t.style.opacity = 0, 2600); }
 
@@ -795,7 +799,7 @@ function renderPlan() {
     const on = sel && sel.id === it.id, dark = lum(it.mat.c) < .5;
     h += `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot})">
       <rect data-t="item" data-id="${it.id}" x="${-it.w/2}" y="${-it.d/2}" width="${it.w}" height="${it.d}" rx="2" fill="${fillFor(it.mat)}" fill-opacity="${it.k === 'rug' ? .75 : .95}" stroke="${on ? 'var(--sel)' : '#0007'}" stroke-width="${(on ? 3 : 1)*px}"/>
-      <line x1="${-it.w/2 + 2}" y1="${-it.d/2 + 2.5}" x2="${it.w/2 - 2}" y2="${-it.d/2 + 2.5}" stroke="#0006" stroke-width="${3*px}" pointer-events="none"/>
+      ${isStair(it) ? stair2D(it, px) : `<line x1="${-it.w/2 + 2}" y1="${-it.d/2 + 2.5}" x2="${it.w/2 - 2}" y2="${-it.d/2 + 2.5}" stroke="#0006" stroke-width="${3*px}" pointer-events="none"/>`}
       <text text-anchor="middle" y="${fs*.35}" ${it.rot > 90 && it.rot <= 270 ? 'transform="rotate(180)"' : ''} font-size="${Math.min(fs, it.d/3, it.w/5)}" fill="${dark ? '#fff' : '#222'}" paint-order="stroke" stroke="${dark ? '#0008' : '#fff8'}" stroke-width="${2*px}">${esc(it.n)}</text></g>`;
   }
   for (const m of S.media) if (m.pin && find('room', m.room)?.lvl === S.cur) {
@@ -844,6 +848,14 @@ function renderPlan() {
     if (calib.length === 2) h += `<line x1="${calib[0].x}" y1="${calib[0].y}" x2="${calib[1].x}" y2="${calib[1].y}" stroke="var(--sel)" stroke-width="${2*px}"/>`;
   }
   layer.innerHTML = h; lvlUI();
+}
+function stair2D(it, px) {
+  const st = `stroke="#0007" stroke-width="${px}" pointer-events="none" fill="none"`;
+  let h = '';
+  if (it.k === 'stairs') { const n = Math.max(3, Math.round(it.h/18)); for (let i = 1; i < n; i++) { const y = it.d/2 - it.d*i/n; h += `<line x1="${-it.w/2}" y1="${y}" x2="${it.w/2}" y2="${y}" ${st}/>`; } h += `<path d="M0 ${it.d/2 - 8} V${-it.d/2 + 12} M-8 ${-it.d/2 + 22} L0 ${-it.d/2 + 12} L8 ${-it.d/2 + 22}" stroke="var(--sel)" stroke-width="${2*px}" fill="none" pointer-events="none"/>`; }
+  else if (it.k === 'stairsL') { const rw = clamp(Math.min(it.w, it.d)*.45, 60, 110), sg = it.flip ? -1 : 1, x1 = sg*(it.w/2 - rw/2); h += `<path d="M${x1} ${it.d/2 - 8} V${-it.d/2 + rw/2} H${-sg*(it.w/2 - 12)} M${-sg*(it.w/2 - 22)} ${-it.d/2 + rw/2 - 8} L${-sg*(it.w/2 - 12)} ${-it.d/2 + rw/2} L${-sg*(it.w/2 - 22)} ${-it.d/2 + rw/2 + 8}" stroke="var(--sel)" stroke-width="${2*px}" fill="none" pointer-events="none"/>`; }
+  else { const r = Math.min(it.w, it.d)/2; h += `<circle r="${r}" ${st}/><circle r="6" ${st}/><path d="M0 ${r*.6} A${r*.6} ${r*.6} 0 1 ${it.flip ? 0 : 1} ${-r*.6} 0" stroke="var(--sel)" stroke-width="${2*px}" fill="none" pointer-events="none"/>`; }
+  return h;
 }
 function openings2D(rm, px) {
   let h = '';
@@ -1092,7 +1104,9 @@ function renderProps() {
   } else {
     P.innerHTML = `<input class="name" data-k="n" value="${esc(o.n)}">
       <div class="g3">${num('w', 'Breite', o.w)}${num('d', 'Tiefe', o.d)}${num('h', 'Höhe', o.h)}</div>
-      <div class="g2"><label>Form<select data-k="k">${opts(KINDS, o.k)}</select></label>${num('e', 'Über Boden (cm)', o.e || 0)}</div>
+      <div class="g2"><label>Form<select data-k="k">${opts(isStair(o) ? STAIRS : KINDS, o.k)}</select></label>${isStair(o) ? (S.floors.length > 1 ? `<label>Etage<select id="iLvl">${floorsSorted().map(f => `<option value="${f.id}" ${f.id === o.lvl ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>` : '<span></span>') : num('e', 'Über Boden (cm)', o.e || 0)}</div>
+      ${isStair(o) ? `<div class="actions" style="margin-top:0">${o.k !== 'stairs' ? `<button data-act="stFlip">⇋ ${o.flip ? 'Linksherum' : 'Rechtsherum'} – spiegeln</button>` : ''}${floorAbove(o.lvl) ? `<button data-act="stFit">↕ Höhe bis „${esc(floorAbove(o.lvl).name)}“</button>` : ''}</div>
+        <p class="hint">Die Treppe beginnt an der Vorderseite (Pfeil im Plan) und führt nach hinten hinauf.</p>` : ''}
       ${matPicker('mat', o.mat, 'Material')}
       <label>Drehung: <b id="rotv">${o.rot}°</b></label>
       <div class="g4"><button data-act="rot" data-v="-90">↺ 90°</button><button data-act="rot" data-v="-15">↺ 15°</button><button data-act="rot" data-v="15">↻ 15°</button><button data-act="rot" data-v="90">↻ 90°</button></div>
@@ -1106,6 +1120,7 @@ function changed(rebuildProps) { renderPlan(); if (mode !== '2d') build3D(); sav
 $('#props').addEventListener('input', e => {
   const o = sel && find(sel.t, sel.id); if (!o) return;
   const el = e.target; if (el.dataset.wall != null || el.id === 'rang') return;
+  if (el.id === 'iLvl') { const it = sel && find('item', sel.id); if (it && el.value !== it.lvl) { it.lvl = el.value; sel = null; changed(true); toast(`Treppe ist jetzt in ${S.floors.find(f => f.id === el.value)?.name}`); } return; }
   if (el.id === 'rLvl') { const r = sel && find('room', sel.id); if (r && el.value !== r.lvl) moveRoomToFloor(r, el.value); return; }
   const isNum = el.type === 'number'; let val = isNum ? (parseFloat(el.value) || 0) : el.value;
   let reprops = false;
@@ -1205,6 +1220,8 @@ document.addEventListener('click', e => {
     case 'lvlCreate': createFloor(b.dataset.src); break;
     case 'lvlDel': deleteFloor(b.dataset.id, b); break;
     case 'lvlAll': showAllFloors = !showAllFloors; build3D(); lvlUI(); break;
+    case 'stFlip': if (o && sel.t === 'item') { o.flip = !o.flip; changed(true); } break;
+    case 'stFit': if (o && sel.t === 'item') { const f = floorAbove(o.lvl); if (f) { o.h = Math.round(f.elev - S.floors.find(x => x.id === o.lvl).elev); changed(true); } } break;
     case 'dock': if (o && sel.t === 'room') dockRoom(o); break;
     case 'cam3': if (mode === '3d' && b.dataset.k !== cam3) { cam3 = b.dataset.k; if (cam3 === 'free') camToFly(); else camToOrbit(); c3UI(); } break;
     case 'bkOut': exportBackup(); break;
@@ -1234,6 +1251,7 @@ document.addEventListener('click', e => {
 });
 function addItem(c) {
   const it = {id:uid(), lvl:S.cur, n:c.n, w:c.w, d:c.d, h:c.h, mat:c.mat, k:c.k || 'box', link:c.link || '', rot:0, e:c.e || 0, x:0, y:0};
+  if (isStair(it)) { const f = floorAbove(S.cur); if (f) it.h = Math.round(f.elev - curFloor().elev); }
   const r = (sel && sel.t === 'room' && find('room', sel.id)) || roomAt(V.cx, V.cy) || R()[0];
   if (r) { const lp = labelPoint(r); it.x = snap(lp.x); it.y = snap(lp.y); fitInRoom(it, r, false); } else { it.x = snap(V.cx); it.y = snap(V.cy); }
   S.items.push(it); sel = {t:'item', id:it.id}; changed(true); toast(`${it.n} platziert`);
@@ -2424,6 +2442,24 @@ function furn(it) {
     case 'cabinet': { g.add(box(w, h, d, m, 0, h/2, 0)); const n = Math.max(1, Math.round(w/.5)); for (let i = 1; i < n; i++) g.add(box(.008, h - .04, .005, dk, -w/2 + w*i/n, h/2, d/2 + .002)); for (let i = 0; i < n; i++) g.add(box(.012, .14, .02, CHROME, -w/2 + w*(i + .5)/n + (n > 1 ? .04 : 0), h*.55, d/2 + .01)); break; }
     case 'plant': { const pr = Math.min(w, d)*.32, ph = Math.min(.4, h*.3); const pot = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr*.8, ph, 20), M({t:'plain', c:'#b6774f'})); pot.position.y = ph/2; g.add(pot); const lr = Math.min(w, d)/2; const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 18, 14), M({t:'plain', c:m.c})); leaf.scale.y = Math.max(1, (h - ph)/(2*lr)); leaf.position.y = ph + (h - ph)/2; g.add(leaf); break; }
     case 'rug': g.add(box(w, .012, d, m, 0, .006, 0)); break;
+    case 'stairsL': {
+      const rw = clamp(Math.min(w, d)*.45, .6, 1.1), sgn = it.flip ? -1 : 1, n = Math.max(4, Math.round(h/.18));
+      const L1 = d - rw, L2 = w - rw, n1 = Math.max(1, Math.round((n - 1)*L1/(L1 + L2))), n2 = Math.max(1, n - 1 - n1), rh = h/(n1 + n2 + 1);
+      const x1 = sgn*(w/2 - rw/2);
+      for (let i = 0; i < n1; i++) { const hi = rh*(i + 1), td = L1/n1; g.add(box(rw, hi, td + .002, i % 2 ? m : shade(m, .94), x1, hi/2, d/2 - td*(i + .5))); }
+      const hL = rh*(n1 + 1); g.add(box(rw, hL, rw, shade(m, .9), x1, hL/2, -d/2 + rw/2));
+      for (let i = 0; i < n2; i++) { const hi = hL + rh*(i + 1), td = L2/n2; g.add(box(td + .002, hi, rw, i % 2 ? m : shade(m, .94), sgn*(w/2 - rw - td*(i + .5)), hi/2, -d/2 + rw/2)); }
+      break;
+    }
+    case 'spiral': {
+      const r = Math.min(w, d)/2, n = Math.max(8, Math.round(h/.19)), turn = Math.PI*1.75/n, sgn = it.flip ? -1 : 1;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(.05, .05, h + .9, 16), M({t:'metal', c:'#9a9ea3'})); pole.position.y = (h + .9)/2; g.add(pole);
+      for (let i = 0; i < n; i++) {
+        const a = Math.PI/2 + sgn*turn*i, st = box(r, .045, r*turn*1.15, i % 2 ? m : shade(m, .9), 0, 0, 0);
+        st.position.set(Math.cos(a)*r/2, h*(i + 1)/n - .022, Math.sin(a)*r/2); st.rotation.y = -a; g.add(st);
+      }
+      break;
+    }
     case 'stairs': { const n = Math.max(3, Math.round(h/.18)), td = d/n; for (let i = 0; i < n; i++) { const hi = h*(i + 1)/n; g.add(box(w, hi, td + .002, i % 2 ? m : shade(m, .94), 0, hi/2, d/2 - td*(i + .5))); } break; }
     case 'desk': { const tt = .03, lw = .045, dw = Math.min(.42, w*.36); g.add(box(w, tt, d, m, 0, h - tt/2, 0)); for (const sz of [-1, 1]) g.add(box(lw, h - tt, lw, dk, -w/2 + lw, (h - tt)/2, sz*(d/2 - lw))); g.add(box(dw, h - tt, d - .02, m, w/2 - dw/2, (h - tt)/2, 0)); for (let i = 1; i < 3; i++) g.add(box(dw - .04, .006, .005, dk, w/2 - dw/2, (h - tt)*i/3, d/2)); break; }
     case 'ochair': { const sh = .48, r = Math.min(w, d)/2; for (let i = 0; i < 5; i++) { const a = i*Math.PI*2/5, arm = box(r, .03, .04, {t:'plain', c:'#2b2b2b'}, Math.cos(a)*r/2, .05, Math.sin(a)*r/2); arm.rotation.y = -a; g.add(arm); } g.add(box(.05, sh - .08, .05, {t:'metal', c:'#9a9ea3'}, 0, (sh - .08)/2 + .05, 0)); g.add(box(w*.8, .08, d*.75, m, 0, sh, .02)); g.add(box(w*.75, h - sh - .04, .07, m, 0, sh + (h - sh)/2, -d*.36)); break; }
@@ -2602,6 +2638,7 @@ function switchFloor(id) {
   }
   renderProps(); lvlUI(); toast(curFloor().name);
 }
+function floorAbove(id) { const e = S.floors.find(f => f.id === id)?.elev ?? 0; return floorsSorted().find(f => f.elev > e); }
 function floorArea(id) { return S.rooms.filter(r => r.lvl === id).reduce((t, r) => t + Math.abs(area2(innerPts(r)))/2/10000, 0); }
 function openFloor(id) {
   const f = S.floors.find(x => x.id === id); if (!f) return;
