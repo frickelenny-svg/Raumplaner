@@ -742,7 +742,16 @@ function renderPlan() {
       <circle cx="${x}" cy="${y}" r="${10*px}" fill="${on ? 'var(--sel)' : '#2f6f5e'}" stroke="#fff" stroke-width="${2*px}"/>
       <text x="${x}" y="${y + 4*px}" text-anchor="middle" font-size="${10*px}" fill="#fff">${m.type === 'vid' ? '▶' : '◉'}</text></g>`;
   }
-  if (sel && sel.t === 'item') h += distLines(find('item', sel.id), px, fs);
+  if (sel && sel.t === 'item') {
+    const it = find('item', sel.id);
+    h += distLines(it, px, fs);
+    if (it && !planMode) {
+      const a = it.rot*Math.PI/180, fx = -Math.sin(a), fy = Math.cos(a), R = it.d/2 + 30*px, hx = it.x + fx*R, hy = it.y + fy*R;
+      h += `<line x1="${it.x + fx*it.d/2}" y1="${it.y + fy*it.d/2}" x2="${hx}" y2="${hy}" stroke="var(--sel)" stroke-width="${1.5*px}" pointer-events="none"/>
+        <g data-t="irot" data-id="${it.id}"><circle cx="${hx}" cy="${hy}" r="${14*px}" fill="var(--sel)" stroke="#fff" stroke-width="${2*px}"/><text x="${hx}" y="${hy + 5*px}" text-anchor="middle" font-size="${15*px}" fill="#fff" font-weight="700">⟳</text></g>
+        ${drag?.irot ? `<text x="${hx}" y="${hy - 20*px}" text-anchor="middle" font-size="${13*px}" font-weight="700" fill="var(--sel)" paint-order="stroke" stroke="#fff" stroke-width="${3*px}">${Math.round(it.rot)}°</text>` : ''}`;
+    }
+  }
   // Wandlängen + Ecken-Griffe des gewählten Raums
   const sr = sel && (sel.t === 'room' ? find('room', sel.id) : sel.t === 'open' ? roomOfOpen(sel.id) : null);
   if (sr && !planMode) {
@@ -847,6 +856,7 @@ svg.addEventListener('pointerdown', e => {
   const el = planMode ? null : e.target.closest('[data-id]');
   if (el) {
     const t = el.dataset.t;
+    if (t === 'irot') { const it = find('item', el.dataset.id); drag = {irot:true, it, room:roomAt(it.x, it.y), moved:false}; return; }
     if (t === 'rot') {
       const r = find('room', el.dataset.id), base = rotBase(r);
       drag = {rotH:true, room:r, base, a0:Math.atan2(p.y - base.c.y, p.x - base.c.x), th:Math.atan2(p.y - base.c.y, p.x - base.c.x), moved:false}; return;
@@ -885,6 +895,14 @@ svg.addEventListener('pointermove', e => {
     const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
     if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true;
     V.cx = drag.cx - dx/V.s; V.cy = drag.cy - dy/V.s; renderPlan(); return;
+  }
+  if (drag.irot) {
+    const it = drag.it; let th = Math.atan2(p.y - it.y, p.x - it.x)*180/Math.PI - 90;
+    const cands = [Math.round(th/15)*15]; if (drag.room) for (const e of innerEdges(drag.room)) { const w = Math.atan2(-e.nx, e.ny)*180/Math.PI; for (const k of [0, 90, 180, 270]) cands.push(w + k); }
+    for (const c of cands) { const d = ((th - c) % 360 + 540) % 360 - 180; if (Math.abs(d) <= 4) { th = c; break; } }
+    th = Math.round(normAng(th)*10)/10;
+    if (th !== it.rot) { it.rot = th; if (drag.room) fitInRoom(it, drag.room, false); drag.moved = true; }
+    renderPlan(); return;
   }
   if (drag.rotH) {
     const b = drag.base; drag.th = Math.atan2(p.y - b.c.y, p.x - b.c.x);
@@ -930,6 +948,7 @@ const endPtr = e => {
   if (!drag || ptrs.size) { if (!ptrs.size) drag = null; return; }
   if (drag.pinDraft) { planMode = null; hideBanner(); save(); const m = pinTarget; pinTarget = null; toast('Standort gespeichert'); renderPlan(); setTimeout(() => openViewerFor(m), 250); }
   else if (drag.bg) save();
+  else if (drag.irot) { drag = null; save(); renderPlan(); renderProps(); return; }
   else if (drag.rotH) { const was = drag; drag = null; save(); renderPlan(); renderProps(); if (was.moved) return; }
   else if (drag.vtx) {
     const r = drag.room;
@@ -990,6 +1009,7 @@ function renderProps() {
       <div class="actions"><button data-act="addOpen" data-k="window">＋ Fenster</button><button data-act="addOpen" data-k="door">＋ Tür</button><button data-act="addOpen" data-k="open">＋ Durchgang</button></div>
       <p class="hint">Türen und Durchgänge an einer gemeinsamen Wand öffnen automatisch auch den Nachbarraum.</p>
       <button class="pri magic" data-act="arStart">📐 Mit Kamera vermessen</button>
+      <button class="magic" data-act="arFurnStart">🛋 Möbel mit Kamera erfassen</button>
       ${sampleFn ? `<button class="magic" data-act="recon">🪄 Aus Fotos nachbauen (Claude)</button>` : ''}
       <div class="actions"><button data-act="photos">📷 Fotos (${S.media.filter(m => m.room === o.id).length})</button><button data-act="del" class="danger">Raum löschen</button></div>`;
   } else if (sel.t === 'open') {
@@ -1121,6 +1141,8 @@ document.addEventListener('click', e => {
       rotateRoom(o, rotBase(o), d); changed(true);
     } break;
     case 'delVtx': if (o && selVtx && sel.t === 'room') { const kids = S.items.filter(it => roomAt(it.x, it.y) === o); removeVertex(o, selVtx.i); selVtx = null; fixOrientation(o); kids.forEach(it => fitInRoom(it, o, false)); changed(true); } break;
+    case 'arFurnStart': if (o && sel.t === 'room') openFurnStart(o); break;
+    case 'arFurnGo': if (o && sel.t === 'room') { closeModal(); startAR(o.id, {mode:'furn', edge:+b.dataset.e}); } break;
     case 'arStart': if (sel && sel.t === 'room') startAR(sel.id); else startAR(null); break;
     case 'arUndo': case 'arAdd': case 'arNext': case 'arMethod': case 'arToFurn': case 'arDetect': case 'arFurnDel': case 'arKind': case 'arFinish': case 'arCancel': arAct(act, b); break;
     case 'arApply': arApply(); break;
@@ -1465,15 +1487,16 @@ function iou(a, b) {
   return I / (A + B - I || 1);
 }
 // Erkennt Möbel auf einem Canvas; Boxen normiert (0–1)
-async function runDetect(canvas, threshold = .1) {
+const CAT_MIN = {rug:.3, lamp:.22, plant:.2, chair:.18, night:.18};
+async function runDetect(canvas, threshold = .15) {
   const det = await getDetector();
   const out = await det(detRaw.fromCanvas(canvas), PROMPTS, {threshold, percentage:true});
   const res = out.map(o => ({score:o.score, cat:PROMPT_CAT[o.label], box:{xmin:clamp(o.box.xmin, 0, 1), ymin:clamp(o.box.ymin, 0, 1), xmax:clamp(o.box.xmax, 0, 1), ymax:clamp(o.box.ymax, 0, 1)}}))
-    .filter(r => r.cat && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) > .006 && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) < .97)
+    .filter(r => r.cat && r.score >= (CAT_MIN[r.cat.k] ?? threshold) && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) > .006 && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) < .97)
     .sort((a, b) => b.score - a.score);
   const keep = [];
   for (const r of res) if (!keep.some(k => iou(k.box, r.box) > .5)) keep.push(r);
-  return keep.slice(0, 15);
+  return keep.slice(0, 8);
 }
 function catItems(cat) { return CAT.map((c, i) => ({c, i})).filter(({c}) => c.g === cat.g && (!cat.only || c.n.includes(cat.only))); }
 // ähnlichstes Katalogmöbel: nach gemessener Breite (cm), sonst ein mittleres
@@ -1521,11 +1544,11 @@ function arUnsupported() {
     : `<p class="hint">Dieses Gerät oder dieser Browser unterstützt keine AR-Vermessung. Nötig sind <b>Chrome auf Android</b> und die App <b>„Google Play-Dienste für AR“</b>. iPhones können das im Browser derzeit nicht.</p>
        <p class="hint">Alternative: Wandlängen mit dem Zollstock messen und im Raum-Panel eintragen, oder im Foto mit „📏 Messen“ abschätzen.</p>`);
 }
-async function startAR(rid) {
+async function startAR(rid, opts = {}) {
   if (!arOK) return arUnsupported();
   const root = $('#ar'); root.hidden = false;
   let session;
-  try { session = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay', 'camera-access'], domOverlay:{root}}); }
+  try { session = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay', 'camera-access', 'anchors'], domOverlay:{root}}); }
   catch (e) { root.hidden = true; return toast('AR konnte nicht gestartet werden: ' + (e.message || e)); }
   const ren = new THREE.WebGLRenderer({antialias:true, alpha:true});
   ren.setPixelRatio(devicePixelRatio); ren.setSize(innerWidth, innerHeight); ren.xr.enabled = true; ren.xr.setReferenceSpaceType('local');
@@ -1536,7 +1559,8 @@ async function startAR(rid) {
   const marks = new THREE.Group(); scene.add(marks);
   const live = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({color:0xffd166}));
   live.visible = false; scene.add(live);
-  ar = {session, ren, scene, reticle, marks, live, cur:null, real:false, method:'corner', corners:[], walls:[], wpend:null, ops:[], pending:null, kind:'window', phase:'corners', floorY:null, done:false, rid, furn:[], detBusy:false, captureCb:null, camOK:null, detMsg:''};
+  ar = {session, ren, scene, reticle, marks, live, cur:null, real:false, method:'corner', corners:[], walls:[], wpend:null, ops:[], pending:null, kind:'window', phase:'corners', floorY:null, done:false, rid, furn:[], detBusy:false, captureCb:null, camOK:null, detMsg:'', mode:opts.mode || 'room', edge:opts.edge ?? 0, align:[], anchorQ:[], lastRd:0};
+  if (ar.mode === 'furn') ar.phase = 'align';
   await ren.xr.setSession(session);
   const viewer = await session.requestReferenceSpace('viewer');
   const hts = await session.requestHitTestSource({space:viewer});
@@ -1546,6 +1570,18 @@ async function startAR(rid) {
   let hadFloor = false;
   ren.setAnimationLoop((t, frame) => {
     if (!frame) return;
+    // neue Punkte im echten Raum verankern – so bleiben sie fest, auch wenn das Tracking nachjustiert
+    if (ar.anchorQ.length && frame.createAnchor) {
+      for (const q of ar.anchorQ.splice(0)) { try { frame.createAnchor(new XRRigidTransform({x:q.x, y:q.y ?? ar.floorY ?? 0, z:q.z}), ref).then(a => { if (q.dead) a.delete(); else q.anchor = a; }, () => {}); } catch (e) {} }
+    }
+    let dirty = false;
+    for (const q of arPoints()) {
+      if (!q.anchor || (frame.trackedAnchors && !frame.trackedAnchors.has(q.anchor))) continue;
+      const pose = frame.getPose(q.anchor.anchorSpace, ref); if (!pose) continue;
+      const P = pose.transform.position;
+      if (Math.abs(P.x - q.x) + Math.abs(P.z - q.z) > .002) { q.x = P.x; q.z = P.z; dirty = true; }
+    }
+    if (dirty && t - ar.lastRd > 250) { ar.lastRd = t; arRedraw(); }
     let pt = null, real = false;
     const hits = frame.getHitTestResults(hts);
     if (hits.length) {
@@ -1558,13 +1594,13 @@ async function startAR(rid) {
       const vp = frame.getViewerPose(ref);
       if (vp) {
         const m = vp.transform.matrix, fy = -m[9];
-        if (fy < -.05) { const s = (ar.floorY - m[13]) / fy; if (s > 0 && s < 12) pt = new THREE.Vector3(m[12] - m[8]*s, ar.floorY, m[14] - m[10]*s); }
+        if (fy < -.2) { const s = (ar.floorY - m[13]) / fy; if (s > 0 && s < 6) pt = new THREE.Vector3(m[12] - m[8]*s, ar.floorY, m[14] - m[10]*s); }
       }
     }
     ar.cur = pt; ar.real = real;
     reticle.visible = !!pt; if (pt) { reticle.position.copy(pt); reticle.material.color.set(real ? 0xffffff : 0xffd166); }
     if (!hadFloor && ar.floorY != null) { hadFloor = true; arUI(); }
-    const last = ar.phase === 'corners' ? (ar.method === 'corner' ? ar.corners.at(-1) : ar.wpend) : ar.pending;
+    const last = ar.phase === 'corners' ? (ar.method === 'corner' ? ar.corners.at(-1) : ar.wpend) : ar.phase === 'align' ? ar.align.at(-1) : ar.phase === 'open' ? ar.pending : null;
     if (last && pt) {
       live.geometry.setFromPoints([new THREE.Vector3(last.x, ar.floorY, last.z), new THREE.Vector3(pt.x, ar.floorY, pt.z)]); live.visible = true;
       $('#arDist').textContent = Math.hypot(pt.x - last.x, pt.z - last.z).toFixed(2).replace('.', ',') + ' m'; $('#arDist').hidden = false;
@@ -1627,19 +1663,21 @@ async function arDetect() {
     st.detMsg = 'Möbel werden erkannt …'; arUI();
     const dets = await runDetect(shot.canvas);
     const X = new THREE.Matrix4().fromArray(shot.xf), camO = new THREE.Vector3().setFromMatrixPosition(X);
-    let n = 0;
+    let n = 0, cut = 0;
     for (const d of dets) {
+      if (d.box.ymax > .97) { cut++; continue; }
       const fy = st.floorY, b = d.box, fl = shotFloor(shot, b.xmin, b.ymax, fy), fr = shotFloor(shot, b.xmax, b.ymax, fy), fc = shotFloor(shot, (b.xmin + b.xmax)/2, b.ymax, fy);
       if (!fc) continue;
       const W = fl && fr ? Math.hypot(fl.x - fr.x, fl.z - fr.z)*100 : 0;
       let bx = fc.x - camO.x, bz = fc.z - camO.z; const bl = Math.hypot(bx, bz) || 1; bx /= bl; bz /= bl;
       const ci = pickItem(d.cat, W); if (ci == null) continue;
       const it = CAT[ci], cx = fc.x + bx*it.d/200, cz = fc.z + bz*it.d/200;
-      const dup = st.furn.findIndex(f => f.cat.k === d.cat.k && Math.hypot(f.x - cx, f.z - cz) < .6);
-      const entry = {cat:d.cat, ci, x:cx, z:cz, bx, bz, W, score:d.score};
-      if (dup >= 0) { if (st.furn[dup].score <= d.score) st.furn[dup] = entry; } else { st.furn.push(entry); n++; }
+      const rad = q => Math.max(CAT[q].w, CAT[q].d)/200;
+      const dup = st.furn.findIndex(f => Math.hypot(f.x - cx, f.z - cz) < Math.max(.45, (rad(ci) + rad(f.ci))*.6));
+      const entry = {cat:d.cat, ci, x:cx, y:fy, z:cz, bx, bz, W, score:d.score};
+      if (dup >= 0) { if (st.furn[dup].score <= d.score) { unanch(st.furn[dup]); st.furn[dup] = anch(entry); } } else { st.furn.push(anch(entry)); n++; }
     }
-    st.detMsg = dets.length ? `${n} neu erkannt.` : 'Nichts erkannt – näher ran oder anderen Blickwinkel probieren.';
+    st.detMsg = dets.length ? `${n} neu erkannt.${cut ? ` ${cut}× Unterkante nicht im Bild – etwas weiter zurück.` : ''}` : 'Nichts erkannt – näher ran oder anderen Blickwinkel probieren.';
   } catch (e) { st.detMsg = 'Erkennung fehlgeschlagen: ' + (e.message || e); }
   st.detBusy = false; if (st === ar) { arRedraw(); arUI(); }
 }
@@ -1654,6 +1692,19 @@ function wallCorners(W) {
   for (let i = 0; i < n; i++) { const a = W[(i - 1 + n) % n], b = W[i], c = lineX(a[0], a[1], b[0], b[1]); if (!c) return null; out.push(c); }
   return out;
 }
+function arPoints() {
+  if (!ar) return [];
+  const L = [...ar.corners, ...ar.walls.flat(), ...ar.ops.flatMap(o => [o.a, o.b]), ...ar.align, ...ar.furn];
+  if (ar.wpend) L.push(ar.wpend); if (ar.pending) L.push(ar.pending);
+  return L;
+}
+const anch = q => { ar.anchorQ.push(q); return q; };
+const unanch = q => { if (!q) return; q.dead = true; try { q.anchor?.delete(); } catch (e) {} };
+function arCorners() {
+  if (ar.method === 'corner') return ar.corners;
+  const c = ar.walls.length >= 3 ? wallCorners(ar.walls) : null;
+  return c ? c.map(q => new THREE.Vector3(q.x, ar.floorY ?? 0, q.z)) : [];
+}
 function arDot(p, color, r = .025) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({color})); m.position.copy(p); return m; }
 function arRedraw() {
   const g = ar.marks; while (g.children.length) { const c = g.children.pop(); c.geometry.dispose(); }
@@ -1662,11 +1713,12 @@ function arRedraw() {
     ar.walls.forEach(([a, b]) => { g.add(arDot(V3(a), 0x7fd1b9), arDot(V3(b), 0x7fd1b9)); line([V3(a), V3(b)], 0x7fd1b9); });
     if (ar.wpend) g.add(arDot(V3(ar.wpend), 0x7fd1b9));
     for (let i = 1; i < ar.walls.length; i++) { const c = lineX(ar.walls[i - 1][0], ar.walls[i - 1][1], ar.walls[i][0], ar.walls[i][1]); if (c) g.add(arDot(V3(c), 0xffd166, .035)); }
-  } else {
-    const P = ar.corners.map(V3);
+  } else if (ar.mode === 'room') {
+    const P = arCorners().map(V3);
     P.forEach(p => g.add(arDot(p, 0x2f6f5e)));
     if (P.length > 1) line(ar.phase === 'corners' ? P : [...P, P[0]], 0x7fd1b9);
   }
+  if (ar.align.length) { const A = ar.align.map(V3); A.forEach(p => g.add(arDot(p, 0xe0782f, .035))); if (A.length > 1) line(A, 0xe0782f); }
   const col = {window:0x4a8fc4, door:0xe0782f, open:0xd6b44a};
   for (const o of ar.ops) { g.add(arDot(V3(o.a), col[o.kind]), arDot(V3(o.b), col[o.kind])); line([V3(o.a), V3(o.b)], col[o.kind]); }
   if (ar.pending) g.add(arDot(V3(ar.pending), col[ar.kind]));
@@ -1688,10 +1740,15 @@ function arUI() {
     else msg ||= ar.wpend ? `Wand ${n + 1}: zweiten Punkt weiter entlang DERSELBEN Wand am Fußboden setzen (möglichst weit auseinander).`
       : `Wand ${n + 1}: einen Punkt am Fuß der Wand setzen – die Ecke muss nicht sichtbar sein. ${n === 0 ? 'Beginne mit der Wand, die im Plan oben liegen soll, dann im Uhrzeigersinn.' : n >= 3 ? 'Oder „Weiter“, wenn alle Wände erfasst sind.' : ''}`;
     btns = `${methodSeg}<button data-act="arUndo" ${empty ? 'disabled' : ''}>↶</button><button class="pri big" data-act="arAdd">＋ ${isW ? 'Punkt' : 'Ecke'}</button><button data-act="arNext" ${n < 3 || ar.wpend ? 'disabled' : ''}>Weiter ›</button>`;
-  } else {
+  } else if (ar.phase === 'open') {
     msg ||= `${KINDS_OPEN[ar.kind]}: ${ar.pending ? 'jetzt den RECHTEN Rand am Boden markieren.' : 'am Boden direkt unter dem LINKEN Rand einen Punkt setzen.'} (${ar.ops.length} markiert)`;
     btns = `<div class="seg arseg">${Object.entries(KINDS_OPEN).map(([k, v]) => `<button data-act="arKind" data-k="${k}" class="${ar.kind === k ? 'on' : ''}">${v}</button>`).join('')}</div>
       <button data-act="arUndo">↶</button><button class="pri big" data-act="arAdd">＋ Punkt</button><button data-act="arToFurn" ${ar.pending ? 'disabled' : ''}>Möbel ›</button><button data-act="arFinish" ${ar.pending ? 'disabled' : ''}>Fertig ✓</button>`;
+  }
+  if (ar.phase === 'align') {
+    const r = find('room', ar.rid), n = r ? r.pts.length : 0, c1 = ar.edge + 1, c2 = (ar.edge + 1) % n + 1;
+    msg ||= ar.align.length === 0 ? `Zuerst den Raum zuordnen: Ziele auf die Bodenecke ${c1} (Anfang von Wand ${ar.edge + 1}, siehe Nummern im Plan) und tippe „＋ Ecke“.` : `Jetzt Bodenecke ${c2} am Ende von Wand ${ar.edge + 1}.`;
+    btns = `<button data-act="arUndo" ${ar.align.length ? '' : 'disabled'}>↶</button><button class="pri big" data-act="arAdd">＋ Ecke ${ar.align.length ? c2 : c1}</button>`;
   }
   if (ar.phase === 'furn') {
     msg = ar.detBusy ? ar.detMsg : `Richte die Kamera auf Möbel (ganz im Bild, inkl. Unterkante) und tippe „Erkennen“. ${ar.detMsg || ''}`;
@@ -1704,36 +1761,38 @@ function arAdd() {
   if (!ar) return;
   if (!ar.cur) return toast(ar.floorY == null ? 'Erst den Boden erkennen lassen' : 'Handy etwas nach unten neigen');
   const p = ar.cur.clone();
-  if (ar.phase === 'corners') {
-    if (ar.method === 'corner') ar.corners.push(p);
-    else if (!ar.wpend) ar.wpend = p;
-    else { if (Math.hypot(p.x - ar.wpend.x, p.z - ar.wpend.z) < .1) return toast('Punkte weiter auseinander setzen (mind. 10 cm)'); ar.walls.push([ar.wpend, p]); ar.wpend = null; }
-  } else if (!ar.pending) ar.pending = p;
-  else { ar.ops.push({kind:ar.kind, a:ar.pending, b:p}); ar.pending = null; }
+  if (ar.phase === 'furn') return;
+  if (ar.phase === 'align') {
+    if (ar.align.length && Math.hypot(p.x - ar.align[0].x, p.z - ar.align[0].z) < .3) return toast('Die zweite Ecke liegt zu nah an der ersten');
+    ar.align.push(anch(p));
+    if (ar.align.length === 2) arAct('arToFurn');
+  } else if (ar.phase === 'corners') {
+    if (ar.method === 'corner') ar.corners.push(anch(p));
+    else if (!ar.wpend) ar.wpend = anch(p);
+    else { if (Math.hypot(p.x - ar.wpend.x, p.z - ar.wpend.z) < .1) return toast('Punkte weiter auseinander setzen (mind. 10 cm)'); ar.walls.push([ar.wpend, anch(p)]); ar.wpend = null; }
+  } else if (!ar.pending) ar.pending = anch(p);
+  else { ar.ops.push({kind:ar.kind, a:ar.pending, b:anch(p)}); ar.pending = null; }
   navigator.vibrate?.(15); arRedraw(); arUI();
 }
 function arAct(act, b) {
   if (!ar) return;
   if (act === 'arUndo') {
-    if (ar.phase === 'furn') { if (ar.furn.length) ar.furn.pop(); else ar.phase = 'open'; }
-    else if (ar.phase === 'corners') { if (ar.method === 'corner') ar.corners.pop(); else if (ar.wpend) ar.wpend = null; else ar.walls.pop(); }
-    else if (ar.pending) ar.pending = null; else if (ar.ops.length) ar.ops.pop();
-    else { ar.phase = 'corners'; if (ar.method === 'wall') ar.corners = []; }
+    if (ar.phase === 'furn') { if (ar.furn.length) unanch(ar.furn.pop()); else if (ar.mode === 'furn') { ar.phase = 'align'; unanch(ar.align.pop()); } else ar.phase = 'open'; }
+    else if (ar.phase === 'align') unanch(ar.align.pop());
+    else if (ar.phase === 'corners') { if (ar.method === 'corner') unanch(ar.corners.pop()); else if (ar.wpend) { unanch(ar.wpend); ar.wpend = null; } else (ar.walls.pop() || []).forEach(unanch); }
+    else if (ar.pending) { unanch(ar.pending); ar.pending = null; } else if (ar.ops.length) { const o = ar.ops.pop(); unanch(o.a); unanch(o.b); }
+    else ar.phase = 'corners';
   }
   if (act === 'arMethod') ar.method = b.dataset.k;
   if (act === 'arAdd') return arAdd();
   if (act === 'arNext') {
-    if (ar.method === 'wall') {
-      const c = wallCorners(ar.walls);
-      if (!c) return toast('Zwei aufeinanderfolgende Wände sind parallel – die Wand dazwischen fehlt');
-      ar.corners = c.map(q => new THREE.Vector3(q.x, ar.floorY, q.z));
-    }
+    if (ar.method === 'wall' && !wallCorners(ar.walls)) return toast('Zwei aufeinanderfolgende Wände sind parallel – die Wand dazwischen fehlt');
     ar.phase = 'open';
   }
   if (act === 'arKind') { ar.kind = b.dataset.k; ar.pending = null; }
   if (act === 'arToFurn') { ar.phase = 'furn'; ar.detMsg = ''; if (!detUnavailable() && ar.camOK !== false) getDetector(pct => { if (ar && ar.phase === 'furn' && !ar.detBusy && !detPipe) { ar.detMsg = `(Modell lädt: ${pct} %)`; arUI(); } }).then(() => { if (ar && !ar.detBusy) { ar.detMsg = '(Modell bereit)'; arUI(); } }, () => {}); }
   if (act === 'arDetect') return arDetect();
-  if (act === 'arFurnDel') ar.furn.splice(+b.dataset.i, 1);
+  if (act === 'arFurnDel') ar.furn.splice(+b.dataset.i, 1).forEach(unanch);
   if (act === 'arFinish') { ar.done = true; return ar.session.end(); }
   if (act === 'arCancel') { ar.done = false; return ar.session.end(); }
   arRedraw(); arUI();
@@ -1742,7 +1801,9 @@ function arEnded() {
   const st = ar; if (!st) return; ar = null;
   st.ren.setAnimationLoop(null); st.ren.dispose(); st.ren.domElement.remove();
   $('#ar').hidden = true;
-  if (st.done && st.corners.length >= 3) { arResult = {res:arToRoom(st), rid:st.rid, ortho:true}; showARResult(); }
+  if (st.mode === 'furn') { if (st.done) applyFurnToRoom(st); return; }
+  ar = st; const C = arCorners(); ar = null;
+  if (st.done && C.length >= 3) { st.corners = C; arResult = {res:arToRoom(st), rid:st.rid, ortho:true}; showARResult(); }
   else if (st.done) toast('Mindestens 3 Ecken nötig');
 }
 // AR-Weltkoordinaten (Meter, x/z) → Plan (cm), erste Wand waagerecht
@@ -1815,6 +1876,31 @@ function showARResult() {
     <div class="actions"><button class="pri" data-act="arApply">Übernehmen</button><button data-act="arRetry">Neu messen</button><button data-act="close">Verwerfen</button></div>`);
   $('#arortho').addEventListener('change', e => { arResult.ortho = e.target.checked; showARResult(); });
 }
+function applyFurnToRoom(st) {
+  const r = find('room', st.rid); if (!r || st.align.length < 2) return toast('Raum-Zuordnung fehlt (2 Ecken nötig)');
+  const P = innerPts(r), n = P.length, A = P[st.edge % n], B = P[(st.edge + 1) % n];
+  const [a1, a2] = st.align, rot = Math.atan2(B.y - A.y, B.x - A.x) - Math.atan2(a2.z - a1.z, a2.x - a1.x), c = Math.cos(rot), s = Math.sin(rot);
+  const map = q => ({x:A.x + ((q.x - a1.x)*c - (q.z - a1.z)*s)*100, y:A.y + ((q.x - a1.x)*s + (q.z - a1.z)*c)*100});
+  reconUndo = JSON.stringify(S);
+  let added = 0, out = 0;
+  for (const f of st.furn) {
+    const pp = map(f), b = {x:f.bx*c - f.bz*s, y:f.bx*s + f.bz*c}, it = makeItem(f.ci, pp.x, pp.y, b);
+    if (!pointInPoly(r.pts, it.x, it.y)) { out++; continue; }
+    snapItemToWall(it, r); S.items.push(it); added++;
+  }
+  const meas = Math.hypot(a2.x - a1.x, a2.z - a1.z)*100, plan = dist(A, B);
+  sel = {t:'room', id:r.id}; changed(true);
+  openModal('🛋 Möbel übernommen', `<p><b>${added} Möbel</b> in „${esc(r.name)}“ gestellt.${out ? ` ${out} lagen außerhalb des Raums und wurden weggelassen.` : ''}</p>
+    <p class="hint">Bezugswand gemessen ${fmtM(meas)} m, im Plan ${fmtM(plan)} m${Math.abs(meas - plan) > 25 ? ' – größere Abweichung, die Positionen können etwas daneben liegen.' : '.'} Möbel lassen sich im Plan verschieben und am ⟳-Griff drehen.</p>
+    <div class="actions"><button class="pri" data-act="close">OK</button><button data-act="reconUndo">↶ Rückgängig</button></div>`);
+}
+function openFurnStart(r) {
+  if (!arOK) return arUnsupported();
+  const P = innerPts(r), n = P.length;
+  openModal('🛋 Möbel mit Kamera erfassen', `<p class="hint">Damit die App weiß, wo du im Raum stehst, tippst du zuerst zwei Ecken einer Wand an. Wähle eine Wand, deren beide Bodenecken gut sichtbar sind (Nummern siehe Plan):</p>
+    <div class="oplist">${r.pts.map((_, i) => `<button data-act="arFurnGo" data-e="${i}"><span>${edgeName(r, i)} · Ecke ${i + 1} → ${(i + 1) % n + 1}</span><small>${fmtM(dist(P[i], P[(i + 1) % n]))} m ›</small></button>`).join('')}</div>
+    <p class="hint">Danach Kamera auf die Möbel richten und „🔍 Erkennen“ tippen. Möbel außerhalb des Raums werden ignoriert.</p>`);
+}
 function arApply() {
   const res = arResult; if (!res) return;
   reconUndo = JSON.stringify(S);
@@ -1835,9 +1921,10 @@ function arApply() {
     n.height = Math.min(n.height, h - (o.kind === 'window' ? n.sill + 5 : 2)); return n;
   });
   const ax = r.x - Math.min(...f.outer.map(p => p.x)), ay = r.y - Math.min(...f.outer.map(p => p.y));
-  for (const fu of f.furn) { const it = makeItem(fu.ci, fu.x + ax, fu.y + ay, fu.b); snapItemToWall(it, r); S.items.push(it); }
+  let added = 0;
+  for (const fu of f.furn) { const it = makeItem(fu.ci, fu.x + ax, fu.y + ay, fu.b); if (!pointInPoly(r.pts, it.x, it.y)) continue; snapItemToWall(it, r); S.items.push(it); added++; }
   sel = {t:'room', id:r.id}; arResult = null; closeModal(); fit(); changed(true);
-  toast(f.furn.length ? `Raum mit ${f.furn.length} Möbeln übernommen – alles lässt sich noch verschieben` : 'Raum übernommen – Ecken lassen sich im Plan noch verschieben');
+  toast(added ? `Raum mit ${added} Möbeln übernommen – alles lässt sich noch verschieben` : 'Raum übernommen – Ecken lassen sich im Plan noch verschieben');
 }
 
 /* ================= Foto-Werkzeuge: Farb-Pipette & Messen ================= */
@@ -1955,16 +2042,16 @@ function detApply() {
   const r = find('room', vt.m.room); if (!r) return toast('Foto gehört zu keinem Raum');
   reconUndo = JSON.stringify(S);
   const lp = labelPoint(r), sel_ = vt.dets.filter(d => d.on && !d.g);
-  let n = 0, k = -(sel_.reduce((t, d) => t + CAT[d.ci].w + 30, 0) - 30)/2;
+  let skipped = 0, n = 0, k = -(sel_.reduce((t, d) => t + CAT[d.ci].w + 30, 0) - 30)/2;
   for (const d of vt.dets.filter(d => d.on)) {
     const c = CAT[d.ci]; let it;
     if (d.g) it = makeItem(d.ci, d.g.x + d.g.b.x*c.d/2, d.g.y + d.g.b.y*c.d/2, d.g.b);
     else { it = makeItem(d.ci, lp.x + k + c.w/2, lp.y, {x:0, y:-1}); k += c.w + 30; }
-    if (!pointInPoly(r.pts, it.x, it.y)) { it.x = lp.x; it.y = lp.y; }
+    if (!pointInPoly(r.pts, it.x, it.y)) { if (d.g) { skipped++; continue; } it.x = lp.x; it.y = lp.y; }
     if (d.g) snapItemToWall(it, r); S.items.push(it); n++;
   }
   S.items.slice(-n).forEach(it => fitInRoom(it, r, false));
-  changed(); toast(`${n} Möbel in „${r.name}“ gestellt – im Plan verschieben, falls nötig`);
+  changed(); toast(`${n} Möbel in „${r.name}“ gestellt${skipped ? `, ${skipped} lagen außerhalb` : ''} – im Plan verschieben/drehen, falls nötig`);
   vt.dets.forEach(d => d.on = false); vtDraw(); vtPanel();
 }
 function vtAct(act, b) {
