@@ -132,6 +132,16 @@ textarea{width:100%;height:150px;font:12px ui-monospace,monospace;border:1px sol
 .detrow{display:grid;grid-template-columns:1fr 1.4fr;gap:8px;align-items:center}
 .chk{display:flex;gap:6px;align-items:center;font-size:14px;color:var(--ink)}
 .chk input{width:auto;margin:0}
+.shopview{position:relative;height:240px;border-radius:12px;overflow:hidden;background:linear-gradient(#f4f1eb,#e2ddd4);margin-bottom:8px}
+.shopview canvas{width:100%;height:100%;display:block;touch-action:none}
+.shopview .hint{position:absolute;bottom:6px;right:10px;margin:0;font-size:11px}
+.segw{display:flex;flex-wrap:wrap;gap:6px}
+.segw button{padding:7px 10px;font-size:13.5px}
+.segw button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.mycard{position:relative}
+.mycard>button{width:100%;text-align:left;padding:10px 10px 30px}
+.myacts{position:absolute;right:6px;bottom:6px;display:flex;gap:4px}
+.myacts button{padding:2px 6px;font-size:12px}
 .chipb{width:auto;height:auto;border-radius:8px;padding:7px 9px;font-size:13px;box-shadow:none;border:1px solid var(--line)}
 #toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#222;color:#fff;padding:8px 14px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:20;max-width:90%;text-align:center}
 a{color:var(--acc)}
@@ -167,6 +177,7 @@ a{color:var(--acc)}
       <button data-act="addRoom">＋ Raum</button>
       <button data-act="catalog">＋ Möbel</button>
       <button data-act="photos">📷 Fotos</button>
+      <button data-act="shopNew" style="flex:0 0 auto" aria-label="Möbel-Werkstatt">🛠</button>
       <button data-act="data" style="flex:0 0 auto">⋯</button>
     </div>
     <div id="props"></div>
@@ -331,6 +342,8 @@ const CAT = [
   {g:'Sonstiges', n:'Waschmaschine', w:60, d:60, h:85, m:{t:'plain', c:'#f4f4f4'}, k:'box'},
   {g:'Sonstiges', n:'Heizkörper 100', w:100, d:10, h:60, e:15, m:{t:'plain', c:'#f4f4f4'}, k:'box'},
 ];
+// Kommoden & Nachttische standardmäßig mit Schubladen
+CAT.forEach(c => { if (['Kommoden', 'Nachttische'].includes(c.g) && c.k === 'cabinet' && !/ALEX/.test(c.n)) c.o = {front:'drawers'}; if (/ALEX Schubladen/.test(c.n)) c.o = {front:'drawers', parts:5}; });
 const KINDS = {box:'Box', table:'Tisch', desk:'Schreibtisch', bed:'Bett', sofa:'Sofa/Sessel', chair:'Stuhl', ochair:'Bürostuhl', shelf:'Regal', cabinet:'Schrank', tv:'Fernseher', lamp:'Lampe', plant:'Pflanze', rug:'Teppich'};
 const STAIRS = {stairs:'Gerade Treppe', stairsL:'L-Treppe (¼ gewendelt)', spiral:'Wendeltreppe'};
 const isStair = it => !!STAIRS[it?.k];
@@ -505,7 +518,7 @@ function defaults() {
   return {rooms:[a, b], items:[], media:[], bg:null, floors:[{id:'f0', name:'Erdgeschoss', elev:0}], cur:'f0'};
 }
 function migrate(s) {
-  s.items ||= []; s.media ||= [];
+  s.items ||= []; s.media ||= []; s.custom ||= [];
   if (!s.floors?.length) s.floors = [{id:'f0', name:'Erdgeschoss', elev:0}];
   if (!s.floors.some(f => f.id === s.cur)) s.cur = s.floors[0].id;
   for (const r of s.rooms) {
@@ -798,7 +811,7 @@ function renderPlan() {
   for (const it of items) {
     const on = sel && sel.id === it.id, dark = lum(it.mat.c) < .5;
     h += `<g transform="translate(${it.x} ${it.y}) rotate(${it.rot})">
-      <rect data-t="item" data-id="${it.id}" x="${-it.w/2}" y="${-it.d/2}" width="${it.w}" height="${it.d}" rx="2" fill="${fillFor(it.mat)}" fill-opacity="${it.k === 'rug' ? .75 : .95}" stroke="${on ? 'var(--sel)' : '#0007'}" stroke-width="${(on ? 3 : 1)*px}"/>
+      <rect data-t="item" data-id="${it.id}" x="${-it.w/2}" y="${-it.d/2}" width="${it.w}" height="${it.d}" rx="${it.k === 'rug' && it.opts?.round ? Math.min(it.w, it.d)/2 : 2}" fill="${fillFor(it.mat)}" fill-opacity="${it.k === 'rug' ? .75 : .95}" stroke="${on ? 'var(--sel)' : '#0007'}" stroke-width="${(on ? 3 : 1)*px}"/>
       ${isStair(it) ? stair2D(it, px) : `<line x1="${-it.w/2 + 2}" y1="${-it.d/2 + 2.5}" x2="${it.w/2 - 2}" y2="${-it.d/2 + 2.5}" stroke="#0006" stroke-width="${3*px}" pointer-events="none"/>`}
       <text text-anchor="middle" y="${fs*.35}" ${it.rot > 90 && it.rot <= 270 ? 'transform="rotate(180)"' : ''} font-size="${Math.min(fs, it.d/3, it.w/5)}" fill="${dark ? '#fff' : '#222'}" paint-order="stroke" stroke="${dark ? '#0008' : '#fff8'}" stroke-width="${2*px}">${esc(it.n)}</text></g>`;
   }
@@ -1110,7 +1123,7 @@ function renderProps() {
       ${matPicker('mat', o.mat, 'Material')}
       <label>Drehung: <b id="rotv">${o.rot}°</b></label>
       <div class="g4"><button data-act="rot" data-v="-90">↺ 90°</button><button data-act="rot" data-v="-15">↺ 15°</button><button data-act="rot" data-v="15">↻ 15°</button><button data-act="rot" data-v="90">↻ 90°</button></div>
-      <div class="actions"><button data-act="toWall" class="pri">⇤ Rückseite an Wand</button></div>
+      <div class="actions"><button data-act="toWall" class="pri">⇤ Rückseite an Wand</button><button data-act="shopItem">🛠 In der Werkstatt anpassen</button></div>
       <label style="margin-top:10px">Produkt-Link (optional)<input data-k="link" placeholder="https://www.ikea.com/de/de/p/…" value="${esc(o.link || '')}"></label>
       ${o.link ? `<p class="hint"><a href="${esc(o.link)}" target="_blank" rel="noopener">Produktseite öffnen ↗</a></p>` : ''}
       <div class="actions"><button data-act="dup">Duplizieren</button><button data-act="del" class="danger">Löschen</button></div>`;
@@ -1215,6 +1228,12 @@ document.addEventListener('click', e => {
     case 'reconStop': reconCtl?.abort(); break;
     case 'reconUndo': closeModal(); undo(); fit(); renderPlan(); break;
     case 'undo': undo(); break;
+    case 'shopNew': openShop(); break;
+    case 'shopItem': if (o && sel.t === 'item') openShop({item:o}); break;
+    case 'shopEdit': openShop({custom:b.dataset.id}); break;
+    case 'myDel': if (b.dataset.sure) { S.custom = S.custom.filter(c => c.id !== b.dataset.id); save(); openCatalog(); } else { b.dataset.sure = 1; b.textContent = 'Löschen?'; } break;
+    case 'addMy': { const c = S.custom.find(x => x.id === b.dataset.id); if (c) { addItem({...c, mat:{...c.m}}); closeModal(); } break; }
+    case 'shopOpt': case 'shopSw': case 'shopSave': case 'shopApply': case 'shopPlace': shopAct(act, b); break;
     case 'lvl': if (b.dataset.id === S.cur) { if (mode === '2d') openFloor(S.cur); } else switchFloor(b.dataset.id); break;
     case 'lvlAdd': openFloorAdd(); break;
     case 'lvlCreate': createFloor(b.dataset.src); break;
@@ -1251,6 +1270,7 @@ document.addEventListener('click', e => {
 });
 function addItem(c) {
   const it = {id:uid(), lvl:S.cur, n:c.n, w:c.w, d:c.d, h:c.h, mat:c.mat, k:c.k || 'box', link:c.link || '', rot:0, e:c.e || 0, x:0, y:0};
+  if (c.o) it.opts = {...c.o}; if (c.m2) it.mat2 = {...c.m2}; if (c.flip) it.flip = true;
   if (isStair(it)) { const f = floorAbove(S.cur); if (f) it.h = Math.round(f.elev - curFloor().elev); }
   const r = (sel && sel.t === 'room' && find('room', sel.id)) || roomAt(V.cx, V.cy) || R()[0];
   if (r) { const lp = labelPoint(r); it.x = snap(lp.x); it.y = snap(lp.y); fitInRoom(it, r, false); } else { it.x = snap(V.cx); it.y = snap(V.cy); }
@@ -1260,7 +1280,7 @@ function addItem(c) {
 /* ================= Modals ================= */
 let modalKind = '';
 function openModal(title, html, kind = '') { modalKind = kind; $('#mtitle').textContent = title; $('#mbody').innerHTML = html; $('#modal').hidden = false; }
-function closeModal() { $('#modal').hidden = true; modalKind = ''; $('#mbody').querySelectorAll('video').forEach(v => v.pause()); }
+function closeModal() { $('#modal').hidden = true; if (modalKind === 'shop') shop = null; modalKind = ''; $('#mbody').querySelectorAll('video').forEach(v => v.pause()); }
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
 async function hydrate() {
   for (const el of $('#mbody').querySelectorAll('[data-mid]')) {
@@ -1272,9 +1292,11 @@ async function hydrate() {
 function openCatalog() {
   const groups = [...new Set(CAT.map(c => c.g))];
   const catHTML = q => { q = q.toLowerCase(); return groups.map(g => { const its = CAT.map((c, i) => [c, i]).filter(([c]) => c.g === g && c.n.toLowerCase().includes(q)); return its.length ? `<div class="sub">${g}</div><div class="cat">${its.map(([c, i]) => `<button data-act="addCat" data-i="${i}">${esc(c.n)}<small>${c.w} × ${c.d} × ${c.h} cm</small></button>`).join('')}</div>` : ''; }).join(''); };
+  const myHTML = q => { const L = (S.custom || []).filter(c => c.n.toLowerCase().includes(q.toLowerCase())); return L.length ? `<div class="sub">Meine Möbel</div><div class="cat">${L.map(c => `<div class="mycard"><button data-act="addMy" data-id="${c.id}">${esc(c.n)}<small>${c.w} × ${c.d} × ${c.h} cm</small></button><div class="myacts"><button data-act="shopEdit" data-id="${c.id}" aria-label="bearbeiten">✏️</button><button data-act="myDel" data-id="${c.id}" aria-label="löschen">🗑</button></div></div>`).join('')}</div>` : ''; };
   openModal('Möbel hinzufügen', `
-    <input id="q" placeholder="Suchen, z. B. KALLAX">
-    <div id="catlist">${catHTML('')}</div>
+    <button class="pri magic" data-act="shopNew">🛠 Möbel-Werkstatt – Möbel anpassen & speichern</button>
+    <input id="q" placeholder="Suchen, z. B. KALLAX" style="margin-top:8px">
+    <div id="catlist">${myHTML('')}${catHTML('')}</div>
     <p class="hint" style="margin-top:8px">Maße sind Richtwerte – mit der Produktseite abgleichen.</p>
     <div class="sub">Eigenes Möbelstück</div>
     <input id="cn" placeholder="Name, z. B. HEMNES Kommode">
@@ -1282,7 +1304,7 @@ function openCatalog() {
     <div class="g3"><label>Form<select id="ck">${opts(KINDS, 'cabinet')}</select></label><label>Material<select id="cmt">${opts(MATS, 'wood')}</select></label><label>Farbe<input id="cc" type="color" value="#c09060"></label></div>
     <input id="cl" placeholder="Produkt-Link (optional)">
     <div class="actions"><button class="pri" data-act="addCustom">Hinzufügen</button></div>`);
-  $('#q').addEventListener('input', e => $('#catlist').innerHTML = catHTML(e.target.value));
+  $('#q').addEventListener('input', e => $('#catlist').innerHTML = myHTML(e.target.value) + catHTML(e.target.value));
 }
 
 /* ---- Fotos ---- */
@@ -2288,7 +2310,7 @@ function getTex(t, c) {
   const k = t + c; if (texCache[k]) return texCache[k];
   const tx = new THREE.CanvasTexture(texCanvas(t, c));
   tx.wrapS = tx.wrapT = THREE.RepeatWrapping; tx.repeat.set(1/TEX[t], 1/TEX[t]);
-  tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = (renderer || shopRen)?.capabilities?.getMaxAnisotropy?.() || 4;
   return texCache[k] = tx;
 }
 function M(m) {
@@ -2431,17 +2453,127 @@ function windowParts(g, o, t, inS) {
   if (o.b > .05 && o.shape !== 'round') g.add(box(o.w + .08, .025, .2, {t:'plain', c:'#f4f2ee'}, o.a + o.w/2, o.b - .0125, inS*(t/2 + .05)));
 }
 
+/* ---- Bauoptionen je Möbelart (Werkstatt) ---- */
+const LEGS = {square:'Eckig', round:'Rund', tapered:'Konisch'};
+const OPTS = {
+  table:[{k:'legs', l:'Beine', t:'seg', c:{...LEGS, panel:'Wangen'}}, {k:'top', l:'Plattenstärke (cm)', t:'num', min:1.5, max:8, d:3}],
+  desk:[{k:'legs', l:'Beine', t:'seg', c:{...LEGS, panel:'Wange'}}, {k:'drawer', l:'Schubladenteil', t:'seg', c:{right:'Rechts', left:'Links', none:'Keins'}}, {k:'top', l:'Plattenstärke (cm)', t:'num', min:1.5, max:8, d:3}],
+  chair:[{k:'legs', l:'Beine', t:'seg', c:LEGS}, {k:'back', l:'Lehne', t:'seg', c:{high:'Hoch', low:'Niedrig', none:'Keine (Hocker)'}}, {k:'arms', l:'Armlehnen', t:'bool', d:false}],
+  ochair:[{k:'back', l:'Rückenlehne', t:'seg', c:{high:'Hoch', low:'Niedrig'}}, {k:'arms', l:'Armlehnen', t:'bool', d:true}],
+  sofa:[{k:'armL', l:'Armlehne links', t:'bool', d:true}, {k:'armR', l:'Armlehne rechts', t:'bool', d:true}, {k:'back', l:'Rückenlehne', t:'seg', c:{high:'Hoch', low:'Niedrig', none:'Keine'}},
+    {k:'seats', l:'Sitzkissen (0 = automatisch)', t:'num', min:0, max:5, d:0}, {k:'legs', l:'Füße', t:'seg', c:{none:'Keine', round:'Rund', square:'Eckig'}}, {k:'chaise', l:'Récamiere', t:'seg', c:{none:'Keine', left:'Links', right:'Rechts'}}],
+  bed:[{k:'head', l:'Kopfteil', t:'seg', c:{high:'Hoch', low:'Niedrig', padded:'Gepolstert', none:'Keins'}}, {k:'foot', l:'Fußteil', t:'bool', d:false}, {k:'legs', l:'Füße', t:'seg', c:{none:'Bodentief', round:'Rund', square:'Eckig'}}],
+  shelf:[{k:'rows', l:'Fächer übereinander (0 = auto)', t:'num', min:0, max:12, d:0}, {k:'cols', l:'Fächer nebeneinander (0 = auto)', t:'num', min:0, max:8, d:0}, {k:'backp', l:'Rückwand', t:'bool', d:true}],
+  cabinet:[{k:'front', l:'Front', t:'seg', c:{doors:'Türen', drawers:'Schubladen', open:'Offen'}}, {k:'parts', l:'Türen/Schubladen (0 = auto)', t:'num', min:0, max:8, d:0}, {k:'handle', l:'Griffe', t:'seg', c:{bar:'Stange', knob:'Knopf', none:'Grifflos'}}, {k:'legs', l:'Unterbau', t:'seg', c:{none:'Sockel', short:'Kurze Füße'}}],
+  lamp:[{k:'shade', l:'Schirm', t:'seg', c:{cyl:'Zylinder', cone:'Kegel', ball:'Kugel'}}],
+  tv:[{k:'wall', l:'An der Wand (ohne Fuß)', t:'bool', d:false}],
+  rug:[{k:'round', l:'Rund / oval', t:'bool', d:false}],
+  stairs:[{k:'rail', l:'Geländer', t:'bool', d:true}],
+  plant:[], box:[], stairsL:[], spiral:[],
+};
+const MAT2 = {table:'Beine', desk:'Beine & Schubladengriffe', chair:'Beine & Armlehnen', ochair:'Gestell', sofa:'Sitzkissen', bed:'Matratze & Polster', shelf:'Rückwand', cabinet:'Griffe & Füße', lamp:'Fuß & Stange', plant:'Topf', tv:'Fuß', stairs:'Geländer'};
+function optDef(k, key) { const o = (OPTS[k] || []).find(x => x.k === key); return !o ? undefined : o.t === 'seg' ? Object.keys(o.c)[0] : o.d; }
+function defMat2(it) {
+  const m = it.mat;
+  return ({ochair:{t:'plain', c:'#2b2b2b'}, sofa:m, bed:{t:'fabric', c:'#f4f2ec'}, cabinet:{t:'metal', c:'#c9ccd0'}, lamp:{t:'plain', c:'#2b2b2b'}, plant:{t:'plain', c:'#b6774f'}, tv:{t:'plain', c:'#2b2b2b'}, stairs:{t:'metal', c:'#9a9ea3'}})[it.k] || shade(m, .78);
+}
+function cyl(rt, rb, hh, mm, x, y, z, seg = 16) { const me = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, hh, seg), M(mm)); me.position.set(x, y, z); return me; }
 function furn(it) {
-  const g = new THREE.Group(), w = it.w/100, d = it.d/100, h = Math.max(.01, it.h/100), m = it.mat, dk = shade(m, .78);
+  const g = new THREE.Group(), w = it.w/100, d = it.d/100, h = Math.max(.01, it.h/100), m = it.mat, dk = shade(m, .78), m2 = it.mat2 || defMat2(it);
+  const O_ = key => (it.opts && it.opts[key] !== undefined && it.opts[key] !== '') ? it.opts[key] : optDef(it.k, key);
+  const leg = (shape, t, lh, mm, x, z, y0 = 0) => g.add(shape === 'round' || shape === 'tapered' ? cyl(shape === 'tapered' ? t*.32 : t/2, shape === 'tapered' ? t*.55 : t/2, lh, mm, x, y0 + lh/2, z) : box(t, lh, t, mm, x, y0 + lh/2, z));
   switch (it.k) {
-    case 'table': { const tt = .03, lw = .045; g.add(box(w, tt, d, m, 0, h - tt/2, 0)); for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(box(lw, h - tt, lw, dk, sx*(w/2 - lw), (h - tt)/2, sz*(d/2 - lw))); break; }
-    case 'bed': { const bh = Math.min(h, .32); g.add(box(w, bh, d, m, 0, bh/2, 0)); g.add(box(w - .08, .18, d - .14, {t:'fabric', c:'#f4f2ec'}, 0, bh + .09, .04)); g.add(box(w - .2, .1, .4, {t:'plain', c:'#ffffff'}, 0, bh + .23, -d/2 + .33)); g.add(box(w, Math.max(.9, h), .05, m, 0, Math.max(.9, h)/2, -d/2 + .025)); break; }
-    case 'sofa': { const sh = .42, aw = Math.min(.15, w*.15); g.add(box(w, sh, d, m, 0, sh/2, 0)); g.add(box(w, h, .2, dk, 0, h/2, -d/2 + .1)); for (const s of [-1, 1]) g.add(box(aw, .62, d, dk, s*(w/2 - aw/2), .31, 0)); break; }
-    case 'chair': { const sh = .45, lw = .035; g.add(box(w, .04, d, m, 0, sh, 0)); g.add(box(w, h - sh, .03, m, 0, sh + (h - sh)/2, -d/2 + .015)); for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(box(lw, sh, lw, dk, sx*(w/2 - lw), sh/2, sz*(d/2 - lw))); break; }
-    case 'shelf': { const t = .018; g.add(box(w, h, t, dk, 0, h/2, -d/2 + t/2)); for (const s of [-1, 1]) g.add(box(t, h, d, m, s*(w/2 - t/2), h/2, 0)); const n = Math.max(1, Math.round(h/.36)); for (let i = 0; i <= n; i++) g.add(box(w, t, d, m, 0, t/2 + (h - t)*i/n, 0)); if (w > .6 && d > .33) { const k = Math.round(w/.36); for (let i = 1; i < k; i++) g.add(box(t, h, d, m, -w/2 + w*i/k, h/2, 0)); } break; }
-    case 'cabinet': { g.add(box(w, h, d, m, 0, h/2, 0)); const n = Math.max(1, Math.round(w/.5)); for (let i = 1; i < n; i++) g.add(box(.008, h - .04, .005, dk, -w/2 + w*i/n, h/2, d/2 + .002)); for (let i = 0; i < n; i++) g.add(box(.012, .14, .02, CHROME, -w/2 + w*(i + .5)/n + (n > 1 ? .04 : 0), h*.55, d/2 + .01)); break; }
-    case 'plant': { const pr = Math.min(w, d)*.32, ph = Math.min(.4, h*.3); const pot = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr*.8, ph, 20), M({t:'plain', c:'#b6774f'})); pot.position.y = ph/2; g.add(pot); const lr = Math.min(w, d)/2; const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 18, 14), M({t:'plain', c:m.c})); leaf.scale.y = Math.max(1, (h - ph)/(2*lr)); leaf.position.y = ph + (h - ph)/2; g.add(leaf); break; }
-    case 'rug': g.add(box(w, .012, d, m, 0, .006, 0)); break;
+    case 'table': case 'desk': {
+      const tt = clamp((+O_('top') || 3)/100, .015, .1), lw = .045, lh = h - tt, legs = O_('legs');
+      g.add(box(w, tt, d, m, 0, h - tt/2, 0));
+      const dr = it.k === 'desk' ? O_('drawer') : 'none', dw = Math.min(.42, w*.36), sx = dr === 'left' ? -1 : 1;
+      for (const s of [-1, 1]) {
+        if (dr !== 'none' && s === sx) continue;
+        if (legs === 'panel') g.add(box(.03, lh, d - .04, m2, s*(w/2 - .03), lh/2, 0));
+        else for (const sz of [-1, 1]) leg(legs, lw, lh, m2, s*(w/2 - lw), sz*(d/2 - lw));
+      }
+      if (dr !== 'none') { g.add(box(dw, lh, d - .02, m, sx*(w/2 - dw/2), lh/2, 0)); for (let i = 1; i < 3; i++) g.add(box(dw - .04, .006, .005, dk, sx*(w/2 - dw/2), lh*i/3, d/2)); for (let i = 0; i < 3; i++) g.add(box(.1, .012, .02, m2, sx*(w/2 - dw/2), lh*(i + .5)/3, d/2 + .01)); }
+      break;
+    }
+    case 'chair': {
+      const sh = .45, lw = .035, back = O_('back');
+      g.add(box(w, .04, d, m, 0, sh, 0));
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) leg(O_('legs'), lw, sh - .02, m2, sx*(w/2 - lw), sz*(d/2 - lw));
+      if (back !== 'none') { const bh = back === 'low' ? Math.min(.22, h - sh) : Math.max(.1, h - sh); g.add(box(w, bh, .03, m, 0, sh + bh/2, -d/2 + .015)); }
+      if (O_('arms')) for (const s of [-1, 1]) { g.add(box(.035, .03, d*.8, m2, s*(w/2 - .02), sh + .22, 0)); g.add(box(.025, .2, .025, m2, s*(w/2 - .02), sh + .11, d*.3)); }
+      break;
+    }
+    case 'ochair': {
+      const sh = .48, r = Math.min(w, d)/2;
+      for (let i = 0; i < 5; i++) { const a = i*Math.PI*2/5, arm = box(r, .03, .04, m2, Math.cos(a)*r/2, .05, Math.sin(a)*r/2); arm.rotation.y = -a; g.add(arm); }
+      g.add(box(.05, sh - .08, .05, {t:'metal', c:'#9a9ea3'}, 0, (sh - .08)/2 + .05, 0));
+      g.add(box(w*.8, .08, d*.75, m, 0, sh, .02));
+      const bh = O_('back') === 'low' ? Math.min(.38, h - sh - .04) : h - sh - .04; g.add(box(w*.75, bh, .07, m, 0, sh + .04 + bh/2, -d*.36));
+      if (O_('arms')) for (const s of [-1, 1]) { g.add(box(.05, .03, d*.45, m2, s*w*.42, sh + .22, 0)); g.add(box(.03, .2, .03, m2, s*w*.42, sh + .12, 0)); }
+      break;
+    }
+    case 'sofa': {
+      const aL = O_('armL'), aR = O_('armR'), back = O_('back'), legs = O_('legs'), ch = O_('chaise');
+      const lg = legs === 'none' ? 0 : .09, sh = .42, aw = Math.min(.15, w*.15), bd = back === 'none' ? 0 : .2;
+      const bh = back === 'low' ? sh + (h - sh)*.45 : h, baseH = sh - lg - .12;
+      const sdep = ch !== 'none' ? Math.min(d, .95) : d, cw = Math.min(.85, w*.42), cs = ch === 'left' ? -1 : 1;
+      // Unterbau: normaler Teil + ggf. Récamiere über die volle Tiefe
+      g.add(box(w, baseH, sdep, m, 0, lg + baseH/2, -d/2 + sdep/2));
+      if (ch !== 'none') g.add(box(cw, baseH, d - sdep, m, cs*(w/2 - cw/2), lg + baseH/2, -d/2 + sdep + (d - sdep)/2));
+      if (bd) g.add(box(w, bh - lg, bd, m, 0, lg + (bh - lg)/2, -d/2 + bd/2));
+      if (aL) g.add(box(aw, .62 - lg, ch === 'left' ? d : sdep, m, -w/2 + aw/2, lg + (.62 - lg)/2, ch === 'left' ? 0 : -d/2 + sdep/2));
+      if (aR) g.add(box(aw, .62 - lg, ch === 'right' ? d : sdep, m, w/2 - aw/2, lg + (.62 - lg)/2, ch === 'right' ? 0 : -d/2 + sdep/2));
+      const x0 = -w/2 + (aL ? aw : 0), x1 = w/2 - (aR ? aw : 0), n = +O_('seats') || Math.max(1, Math.round((x1 - x0)/.7));
+      const cd = sdep - bd - .02;
+      for (let i = 0; i < n; i++) { const cwi = (x1 - x0)/n; g.add(box(cwi - .015, .12, cd, m2, x0 + cwi*(i + .5), lg + baseH + .06, -d/2 + bd + cd/2 + .01)); }
+      if (ch !== 'none') { const cx = cs*(w/2 - (cs > 0 ? (aR ? aw : 0) : (aL ? aw : 0)) - (cw - aw)/2); g.add(box(cw - aw - .02, .12, d - sdep - .02, m2, cx, lg + baseH + .06, -d/2 + sdep + (d - sdep)/2)); }
+      if (lg) for (const sx of [-1, 1]) for (const sz of [-1, 1]) leg(legs, .045, lg, {t:'wood', c:'#4a3626'}, sx*(w/2 - .06), sz > 0 && ch !== 'none' && sx !== cs ? -d/2 + sdep - .06 : sz*(d/2 - .06));
+      break;
+    }
+    case 'bed': {
+      const lg = O_('legs') === 'none' ? 0 : .12, base = Math.max(lg + .1, Math.min(h, .32)), head = O_('head');
+      g.add(box(w, base - lg, d, m, 0, lg + (base - lg)/2, 0));
+      if (lg) for (const sx of [-1, 1]) for (const sz of [-1, 1]) leg(O_('legs'), .05, lg, m, sx*(w/2 - .05), sz*(d/2 - .05));
+      g.add(box(w - .08, .18, d - .14, m2, 0, base + .09, .04));
+      g.add(box(w - .2, .1, .4, {t:'plain', c:'#ffffff'}, 0, base + .23, -d/2 + .33));
+      if (head === 'high') g.add(box(w, Math.max(.9, h), .05, m, 0, Math.max(.9, h)/2, -d/2 + .025));
+      if (head === 'low') g.add(box(w, .6, .05, m, 0, .3, -d/2 + .025));
+      if (head === 'padded') { g.add(box(w, 1.05, .05, m, 0, .525, -d/2 + .025)); g.add(box(w - .06, .55, .08, {t:'fabric', c:m2.c}, 0, base + .45, -d/2 + .08)); }
+      if (O_('foot')) g.add(box(w, base + .18, .04, m, 0, (base + .18)/2, d/2 - .02));
+      break;
+    }
+    case 'shelf': {
+      const t = .018, rows = +O_('rows') || Math.max(1, Math.round(h/.36)), cols = +O_('cols') || (w > .6 && d > .33 ? Math.round(w/.36) : 1);
+      if (O_('backp')) g.add(box(w, h, t, m2, 0, h/2, -d/2 + t/2));
+      for (const s of [-1, 1]) g.add(box(t, h, d, m, s*(w/2 - t/2), h/2, 0));
+      for (let i = 0; i <= rows; i++) g.add(box(w, t, d, m, 0, t/2 + (h - t)*i/rows, 0));
+      for (let i = 1; i < cols; i++) g.add(box(t, h, d, m, -w/2 + w*i/cols, h/2, 0));
+      break;
+    }
+    case 'cabinet': {
+      const front = O_('front'), hd = O_('handle'), lg = O_('legs') === 'short' ? .1 : 0, H = h - lg;
+      if (lg) for (const sx of [-1, 1]) for (const sz of [-1, 1]) leg('round', .035, lg, m2, sx*(w/2 - .05), sz*(d/2 - .05));
+      if (front === 'open') {
+        const t = .018, n = +O_('parts') || Math.max(1, Math.round(H/.35));
+        g.add(box(w, H, t, dk, 0, lg + H/2, -d/2 + t/2)); for (const s of [-1, 1]) g.add(box(t, H, d, m, s*(w/2 - t/2), lg + H/2, 0));
+        for (let i = 0; i <= n; i++) g.add(box(w, t, d, m, 0, lg + t/2 + (H - t)*i/n, 0));
+        break;
+      }
+      g.add(box(w, H, d, m, 0, lg + H/2, 0));
+      const handle = (x, y, vertical) => { if (hd === 'knob') g.add(cyl(.018, .018, .03, m2, x, y, d/2 + .015).rotateX(Math.PI/2)); else if (hd === 'bar') g.add(vertical ? box(.012, .14, .02, m2, x, y, d/2 + .01) : box(.14, .012, .02, m2, x, y, d/2 + .01)); };
+      if (front === 'drawers') {
+        const n = +O_('parts') || Math.max(2, Math.round(H/.25));
+        for (let i = 1; i < n; i++) g.add(box(w - .02, .006, .005, dk, 0, lg + H*i/n, d/2 + .002));
+        for (let i = 0; i < n; i++) handle(0, lg + H*(i + .5)/n + (hd === 'bar' ? H/n*.2 : 0), false);
+      } else {
+        const n = +O_('parts') || Math.max(1, Math.round(w/.5));
+        for (let i = 1; i < n; i++) g.add(box(.008, H - .04, .005, dk, -w/2 + w*i/n, lg + H/2, d/2 + .002));
+        for (let i = 0; i < n; i++) { const cx = -w/2 + w*(i + .5)/n, off = n > 1 ? (i % 2 ? -1 : 1)*(w/n/2 - .05) : w/2 - .06 - w/2*0; handle(n > 1 ? cx + off : w/2 - .06, lg + H*.55, true); }
+      }
+      break;
+    }
+    case 'plant': { const pr = Math.min(w, d)*.32, ph = Math.min(.4, h*.3); g.add(cyl(pr, pr*.8, ph, m2, 0, ph/2, 0, 20)); const lr = Math.min(w, d)/2; const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 18, 14), M({t:'plain', c:m.c})); leaf.scale.y = Math.max(1, (h - ph)/(2*lr)); leaf.position.y = ph + (h - ph)/2; g.add(leaf); break; }
+    case 'rug': if (O_('round')) { const c = cyl(.5, .5, .012, m, 0, .006, 0, 48); c.scale.set(w, 1, d); g.add(c); } else g.add(box(w, .012, d, m, 0, .006, 0)); break;
     case 'stairsL': {
       const rw = clamp(Math.min(w, d)*.45, .6, 1.1), sgn = it.flip ? -1 : 1, n = Math.max(4, Math.round(h/.18));
       const L1 = d - rw, L2 = w - rw, n1 = Math.max(1, Math.round((n - 1)*L1/(L1 + L2))), n2 = Math.max(1, n - 1 - n1), rh = h/(n1 + n2 + 1);
@@ -2453,18 +2585,36 @@ function furn(it) {
     }
     case 'spiral': {
       const r = Math.min(w, d)/2, n = Math.max(8, Math.round(h/.19)), turn = Math.PI*1.75/n, sgn = it.flip ? -1 : 1;
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(.05, .05, h + .9, 16), M({t:'metal', c:'#9a9ea3'})); pole.position.y = (h + .9)/2; g.add(pole);
+      g.add(cyl(.05, .05, h + .9, {t:'metal', c:'#9a9ea3'}, 0, (h + .9)/2, 0));
       for (let i = 0; i < n; i++) {
         const a = Math.PI/2 + sgn*turn*i, st = box(r, .045, r*turn*1.15, i % 2 ? m : shade(m, .9), 0, 0, 0);
         st.position.set(Math.cos(a)*r/2, h*(i + 1)/n - .022, Math.sin(a)*r/2); st.rotation.y = -a; g.add(st);
       }
       break;
     }
-    case 'stairs': { const n = Math.max(3, Math.round(h/.18)), td = d/n; for (let i = 0; i < n; i++) { const hi = h*(i + 1)/n; g.add(box(w, hi, td + .002, i % 2 ? m : shade(m, .94), 0, hi/2, d/2 - td*(i + .5))); } break; }
-    case 'desk': { const tt = .03, lw = .045, dw = Math.min(.42, w*.36); g.add(box(w, tt, d, m, 0, h - tt/2, 0)); for (const sz of [-1, 1]) g.add(box(lw, h - tt, lw, dk, -w/2 + lw, (h - tt)/2, sz*(d/2 - lw))); g.add(box(dw, h - tt, d - .02, m, w/2 - dw/2, (h - tt)/2, 0)); for (let i = 1; i < 3; i++) g.add(box(dw - .04, .006, .005, dk, w/2 - dw/2, (h - tt)*i/3, d/2)); break; }
-    case 'ochair': { const sh = .48, r = Math.min(w, d)/2; for (let i = 0; i < 5; i++) { const a = i*Math.PI*2/5, arm = box(r, .03, .04, {t:'plain', c:'#2b2b2b'}, Math.cos(a)*r/2, .05, Math.sin(a)*r/2); arm.rotation.y = -a; g.add(arm); } g.add(box(.05, sh - .08, .05, {t:'metal', c:'#9a9ea3'}, 0, (sh - .08)/2 + .05, 0)); g.add(box(w*.8, .08, d*.75, m, 0, sh, .02)); g.add(box(w*.75, h - sh - .04, .07, m, 0, sh + (h - sh)/2, -d*.36)); break; }
-    case 'tv': { const ph = h*.82, sw = Math.min(w*.35, .4); g.add(box(sw, .02, Math.min(d, .22), {t:'plain', c:'#2b2b2b'}, 0, .01, 0)); g.add(box(.06, h - ph, .03, {t:'plain', c:'#2b2b2b'}, 0, (h - ph)/2, 0)); g.add(box(w, ph, .05, m, 0, h - ph/2, 0)); g.add(box(w - .03, ph - .03, .002, {t:'plain', c:'#111418'}, 0, h - ph/2, .026)); break; }
-    case 'lamp': { const sr = Math.min(w, d)/2; const base = new THREE.Mesh(new THREE.CylinderGeometry(sr*.7, sr*.8, .03, 24), M({t:'plain', c:'#2b2b2b'})); base.position.y = .015; g.add(base); g.add(box(.025, h - .3, .025, {t:'metal', c:'#9a9ea3'}, 0, (h - .3)/2, 0)); const shd = new THREE.Mesh(new THREE.CylinderGeometry(sr*.75, sr, .32, 24, 1, true), new THREE.MeshStandardMaterial({color:m.c, emissive:'#7a6a4a', emissiveIntensity:.5, side:THREE.DoubleSide, roughness:.9})); shd.position.y = h - .16; g.add(shd); break; }
+    case 'stairs': {
+      const n = Math.max(3, Math.round(h/.18)), td = d/n;
+      for (let i = 0; i < n; i++) { const hi = h*(i + 1)/n; g.add(box(w, hi, td + .002, i % 2 ? m : shade(m, .94), 0, hi/2, d/2 - td*(i + .5))); }
+      if (O_('rail')) {
+        const L = Math.hypot(d, h), rail = box(.04, .04, L, m2, w/2 - .03, h/2 + .9, 0); rail.rotation.x = Math.atan2(h, d); g.add(rail);
+        for (let i = 0; i <= 3; i++) { const z = d/2 - d*i/3, y0 = h*i/3; g.add(box(.03, .9, .03, m2, w/2 - .03, y0 + .45, z)); }
+      }
+      break;
+    }
+    case 'tv': {
+      const ph = h*.82;
+      if (!O_('wall')) { const sw = Math.min(w*.35, .4); g.add(box(sw, .02, Math.min(d, .22), m2, 0, .01, 0)); g.add(box(.06, h - ph, .03, m2, 0, (h - ph)/2, 0)); }
+      g.add(box(w, ph, .05, m, 0, h - ph/2, O_('wall') ? -d/2 + .03 : 0)); g.add(box(w - .03, ph - .03, .002, {t:'plain', c:'#111418'}, 0, h - ph/2, (O_('wall') ? -d/2 + .03 : 0) + .026));
+      break;
+    }
+    case 'lamp': {
+      const sr = Math.min(w, d)/2, shp = O_('shade');
+      g.add(cyl(sr*.7, sr*.8, .03, m2, 0, .015, 0, 24)); g.add(box(.025, h - .3, .025, m2, 0, (h - .3)/2, 0));
+      const lm = new THREE.MeshStandardMaterial({color:m.c, emissive:'#7a6a4a', emissiveIntensity:.5, side:THREE.DoubleSide, roughness:.9});
+      const geo = shp === 'ball' ? new THREE.SphereGeometry(sr*.85, 24, 16) : new THREE.CylinderGeometry(shp === 'cone' ? sr*.35 : sr*.75, sr, .32, 24, 1, true);
+      const shd = new THREE.Mesh(geo, lm); shd.position.y = h - (shp === 'ball' ? sr*.85 : .16); g.add(shd);
+      break;
+    }
     default: g.add(box(w, h, d, m, 0, h/2, 0));
   }
   g.position.set(it.x/100, (it.e || 0)/100, it.y/100);
@@ -2616,6 +2766,106 @@ cv.addEventListener('wheel', e => {
 
 let raf = 0, last = 0;
 function loop(t) { raf = requestAnimationFrame(loop); const dt = Math.min(.05, (t - last)/1000 || 0); last = t; if (isFly()) stepWalk(dt); else placeOrbit(); if (mode === '3d') { for (const g of sideGroups) { const u = g.userData; g.visible = u.ox*(camera.position.x - u.cx) + u.oz*(camera.position.z - u.cz) < 0; } } renderer.render(scene, camera); }
+
+/* ================= Möbel-Werkstatt ================= */
+let shop = null, shopRen = null, shopRaf = 0;
+const allCat = () => [...(S.custom || []).map(c => ({...c, g:'Meine Möbel'})), ...CAT];
+function catToItem(c) { return {id:uid(), lvl:S.cur, n:c.n, w:c.w, d:c.d, h:c.h, mat:{...c.m}, mat2:c.m2 ? {...c.m2} : undefined, k:c.k || 'box', opts:c.o ? {...c.o} : {}, e:c.e || 0, flip:!!c.flip, link:'', rot:0, x:0, y:0}; }
+function openShop(src = {}) {
+  let it, from = 'new', ref = null;
+  if (src.item) { it = structuredClone(src.item); from = 'item'; ref = src.item.id; }
+  else if (src.custom) { const c = S.custom.find(x => x.id === src.custom); if (!c) return; it = catToItem(c); from = 'custom'; ref = c.id; }
+  else it = catToItem(CAT[src.cat ?? 1]);
+  it.opts ||= {}; it.x = it.y = 0; it.rot = 0;
+  shop = {it, from, ref, th:.6};
+  const groups = [...new Set(allCat().map(c => c.g))];
+  openModal('🛠 Möbel-Werkstatt', `
+    <div class="shopview"><canvas id="shopcv"></canvas><span class="hint">Ziehen zum Drehen</span></div>
+    ${from === 'new' ? `<label>Ausgangsmöbel<select id="shBase">${groups.map(g => `<optgroup label="${esc(g)}">${allCat().map((c, i) => [c, i]).filter(([c]) => c.g === g && !STAIRS[c.k] || (c.g === g && c.k === 'stairs')).map(([c, i]) => `<option value="${i}">${esc(c.n)}</option>`).join('')}</optgroup>`).join('')}</select></label>` : ''}
+    <div id="shopCtl"></div>`, 'shop');
+  if ($('#shBase')) { $('#shBase').value = String((S.custom || []).length + (src.cat ?? 1)); $('#shBase').addEventListener('change', e => { const c = allCat()[+e.target.value]; shop.it = catToItem(c); shop.it.opts ||= {}; shopCtl(); shopBuild(); }); }
+  shopCtl(); shopInit();
+}
+function shopCtl() {
+  const it = shop.it, P = $('#shopCtl'); if (!P) return;
+  const ctl = (OPTS[it.k] || []).map(o => {
+    const v = it.opts[o.k] ?? optDef(it.k, o.k);
+    if (o.t === 'seg') return `<div class="sub" style="margin-top:10px">${o.l}</div><div class="segw">${Object.entries(o.c).map(([k, l]) => `<button data-act="shopOpt" data-shopt="${o.k}" data-v="${k}" class="${v === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    if (o.t === 'bool') return `<label class="chk" style="margin-top:10px"><input type="checkbox" data-shopb="${o.k}" ${v ? 'checked' : ''}> ${o.l}</label>`;
+    return `<label style="margin-top:8px">${o.l}<input type="number" step="${o.k === 'top' ? .5 : 1}" min="${o.min}" max="${o.max}" data-shopn="${o.k}" value="${v ?? ''}"></label>`;
+  }).join('');
+  const mp = (key, m, label) => `<div class="sub">${label}</div><div class="mat"><select data-shopm="${key}.t">${opts(MATS, m.t)}</select><input type="color" data-shopm="${key}.c" value="${m.c}"></div>
+    <div class="sw">${(PRESETS[m.t] || PRESETS.plain).map(c => `<button data-act="shopSw" data-path="${key}" data-c="${c}" class="${c === m.c ? 'on' : ''}" style="background:${swatchBg(m.t, c)}"></button>`).join('')}</div>`;
+  const m2 = it.mat2 || defMat2(it);
+  P.innerHTML = `<label>Name<input data-shopf="n" value="${esc(it.n)}"></label>
+    <div class="g3">${['w', 'd', 'h'].map((k, i) => `<label>${['Breite', 'Tiefe', 'Höhe'][i]} (cm)<input type="number" data-shopf="${k}" value="${it[k]}"></label>`).join('')}</div>
+    ${STAIRS[it.k] ? `<label>Form<select data-shopf="k">${opts(STAIRS, it.k)}</select></label>` : ''}
+    ${ctl || '<p class="hint">Für diese Möbelart gibt es keine weiteren Bauoptionen – Maße und Materialien lassen sich anpassen.</p>'}
+    ${mp('mat', it.mat, 'Hauptmaterial')}
+    ${MAT2[it.k] ? mp('mat2', m2, MAT2[it.k]) : ''}
+    <div class="actions">
+      ${shop.from === 'custom' ? `<button class="pri" data-act="shopSave" data-mode="update">💾 Änderungen speichern</button><button data-act="shopSave" data-mode="new">Als neues speichern</button>` : `<button class="pri" data-act="shopSave" data-mode="new">💾 In „Meine Möbel“ speichern</button>`}
+      ${shop.from === 'item' ? `<button data-act="shopApply">✓ Auf platziertes Möbel anwenden</button>` : `<button data-act="shopPlace">➕ In den Raum stellen</button>`}
+    </div>`;
+}
+function shopInit() {
+  const cv2 = $('#shopcv'); if (!cv2) return;
+  shopRen?.dispose();
+  shopRen = new THREE.WebGLRenderer({canvas:cv2, antialias:true, alpha:true}); shopRen.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const r = cv2.getBoundingClientRect(); shopRen.setSize(r.width, r.height, false);
+  const sc = new THREE.Scene(); sc.add(new THREE.HemisphereLight(0xffffff, 0x9a8f80, 1.7)); const dl = new THREE.DirectionalLight(0xffffff, 1.3); dl.position.set(3, 6, 4); sc.add(dl);
+  const fl = new THREE.Mesh(new THREE.CircleGeometry(4, 48), new THREE.MeshStandardMaterial({color:'#ece8e1'})); fl.rotation.x = -Math.PI/2; sc.add(fl);
+  const cam = new THREE.PerspectiveCamera(40, r.width / r.height, .05, 100);
+  Object.assign(shop, {sc, cam, grp:null});
+  let drag = null;
+  cv2.addEventListener('pointerdown', e => { drag = e.clientX; cv2.setPointerCapture(e.pointerId); shop.auto = false; });
+  cv2.addEventListener('pointermove', e => { if (drag != null) { shop.th -= (e.clientX - drag)*.01; drag = e.clientX; } });
+  cv2.addEventListener('pointerup', () => drag = null);
+  shop.auto = true; shopBuild();
+  cancelAnimationFrame(shopRaf);
+  const loop = () => {
+    if (!shop || !$('#shopcv')) { shopRen?.dispose(); shopRen = null; return; }
+    shopRaf = requestAnimationFrame(loop);
+    if (shop.auto) shop.th += .004;
+    const it = shop.it, R0 = Math.max(it.w, it.d, it.h)/100*1.9 + .6, cy = it.h/200;
+    cam.position.set(Math.sin(shop.th)*R0, cy + R0*.55, Math.cos(shop.th)*R0); cam.lookAt(0, cy*.8, 0);
+    shopRen.render(sc, cam);
+  };
+  loop();
+}
+function shopBuild() {
+  if (!shop?.sc) return;
+  if (shop.grp) { shop.sc.remove(shop.grp); shop.grp.traverse(o => o.geometry?.dispose()); }
+  shop.grp = furn({...shop.it, x:0, y:0, rot:0, e:shop.it.e || 0}); shop.sc.add(shop.grp);
+}
+function shopChanged(reCtl) { if (reCtl) shopCtl(); shopBuild(); }
+document.addEventListener('input', e => {
+  if (modalKind !== 'shop' || !shop) return;
+  const el = e.target, it = shop.it;
+  if (el.dataset.shopf) { const k = el.dataset.shopf; it[k] = el.type === 'number' ? Math.max(1, parseFloat(el.value) || 1) : el.value; shopChanged(k === 'k'); }
+  else if (el.dataset.shopn) { it.opts[el.dataset.shopn] = el.value === '' ? undefined : clamp(parseFloat(el.value) || 0, +el.min, +el.max); shopChanged(); }
+  else if (el.dataset.shopb) { it.opts[el.dataset.shopb] = el.checked; shopChanged(); }
+  else if (el.dataset.shopm) { const [p, f] = el.dataset.shopm.split('.'); it[p] = {...(it[p] || defMat2(it))}; it[p][f] = el.value; if (f === 't') it[p].c = (PRESETS[el.value] || PRESETS.plain)[0]; shopChanged(f === 't'); }
+});
+function shopAct(act, b) {
+  const it = shop?.it; if (!it) return;
+  if (act === 'shopOpt') { it.opts[b.dataset.shopt] = b.dataset.v; shopChanged(true); }
+  if (act === 'shopSw') { const p = b.dataset.path; it[p] = {...(it[p] || defMat2(it)), c:b.dataset.c}; shopChanged(true); }
+  if (act === 'shopSave') {
+    S.custom ||= [];
+    const entry = {id:b.dataset.mode === 'update' ? shop.ref : uid(), n:it.n || 'Mein Möbel', w:it.w, d:it.d, h:it.h, m:{...it.mat}, m2:it.mat2 ? {...it.mat2} : undefined, k:it.k, o:{...it.opts}, e:it.e || 0, flip:!!it.flip};
+    if (b.dataset.mode === 'update') { const i = S.custom.findIndex(c => c.id === shop.ref); if (i >= 0) S.custom[i] = entry; }
+    else { S.custom.unshift(entry); shop.from = 'custom'; shop.ref = entry.id; }
+    save(); shopCtl(); toast(`„${entry.n}“ ist jetzt in „Meine Möbel“`);
+  }
+  if (act === 'shopApply') {
+    const t = find('item', shop.ref); if (!t) return toast('Möbel nicht mehr vorhanden');
+    Object.assign(t, {n:it.n, w:it.w, d:it.d, h:it.h, k:it.k, mat:{...it.mat}, mat2:it.mat2 ? {...it.mat2} : undefined, opts:{...it.opts}});
+    fitInRoom(t, roomAt(t.x, t.y), false);
+    closeModal(); sel = {t:'item', id:t.id}; changed(true); toast('Änderungen übernommen');
+  }
+  if (act === 'shopPlace') { closeModal(); addItem({...it, m:it.mat, mat:{...it.mat}, m2:it.mat2, o:it.opts}); }
+}
 
 /* ================= Etagen ================= */
 function lvlUI() {
