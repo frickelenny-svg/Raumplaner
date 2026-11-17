@@ -100,6 +100,10 @@ textarea{width:100%;height:150px;font:12px ui-monospace,monospace;border:1px sol
 .rotrow input{flex:1}
 .rotrow b{min-width:44px;text-align:right}
 .walls{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0}
+.arlist{width:100%;max-height:22vh;overflow:auto;display:flex;flex-direction:column;gap:4px;margin-bottom:4px}
+.arlist div{display:flex;align-items:center;gap:8px;background:#0008;border-radius:8px;padding:4px 4px 4px 10px;font-size:14px}
+.arlist span{flex:1}
+.arlist button{background:#fff3;color:#fff;border:0;padding:4px 10px;min-height:0}
 .arseg{width:100%;justify-content:center;margin-bottom:4px}
 #arCross{position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 1px #0006}
 #arDist{position:absolute;top:50%;left:50%;transform:translate(-50%,22px);background:#000a;padding:3px 9px;border-radius:8px;font-weight:600}
@@ -108,7 +112,11 @@ textarea{width:100%;height:150px;font:12px ui-monospace,monospace;border:1px sol
 .vtools button{flex:1}
 .pick{display:flex;align-items:center;gap:10px;margin:8px 0}
 .pick span{width:42px;height:42px;border-radius:10px;border:1px solid var(--line)}
-.sw .chipb{width:auto;height:auto;border-radius:8px;padding:7px 9px;font-size:13px;box-shadow:none;border:1px solid var(--line)}
+.sw .detlist{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.detrow{display:grid;grid-template-columns:1fr 1.4fr;gap:8px;align-items:center}
+.chk{display:flex;gap:6px;align-items:center;font-size:14px;color:var(--ink)}
+.chk input{width:auto;margin:0}
+.chipb{width:auto;height:auto;border-radius:8px;padding:7px 9px;font-size:13px;box-shadow:none;border:1px solid var(--line)}
 #toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#222;color:#fff;padding:8px 14px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:20;max-width:90%;text-align:center}
 a{color:var(--acc)}
 </style>
@@ -182,27 +190,120 @@ const PRESETS = {
 const TEX = {wood:1.6, parquet:.8, tiles:.6, marble:1.2, concrete:1.5, brick:.6, fabric:.25, metal:.8, plaster:1};
 const ROUGH = {plain:.85, wood:.7, parquet:.6, tiles:.35, marble:.2, concrete:.9, brick:.95, fabric:1, metal:.35, plaster:.95};
 
+const W_ = {t:'plain', c:'#f4f2ec'}, OAK = {t:'wood', c:'#c09060'}, DARK = {t:'plain', c:'#3b3f45'}, BLK = {t:'plain', c:'#2b2b2b'};
 const CAT = [
-  {g:'Regale', n:'KALLAX Regal 2×4', w:77, d:39, h:147, m:{t:'plain',c:'#f4f2ec'}, k:'shelf'},
-  {g:'Regale', n:'KALLAX Regal 4×4', w:147, d:39, h:147, m:{t:'plain',c:'#f4f2ec'}, k:'shelf'},
-  {g:'Regale', n:'BILLY Bücherregal', w:80, d:28, h:202, m:{t:'plain',c:'#f4f2ec'}, k:'shelf'},
-  {g:'Tische', n:'LACK Couchtisch', w:90, d:55, h:45, m:{t:'plain',c:'#2b2b2b'}, k:'table'},
-  {g:'Tische', n:'MICKE Schreibtisch', w:105, d:50, h:75, m:{t:'plain',c:'#f4f2ec'}, k:'table'},
-  {g:'Tische', n:'LISABO Esstisch', w:140, d:78, h:74, m:{t:'wood',c:'#c09060'}, k:'table'},
-  {g:'Betten', n:'MALM Bett 140×200', w:156, d:209, h:38, m:{t:'plain',c:'#f4f2ec'}, k:'bed'},
-  {g:'Betten', n:'MALM Bett 160×200', w:176, d:209, h:38, m:{t:'wood',c:'#9a6a40'}, k:'bed'},
-  {g:'Sitzen', n:'KIVIK 3er-Sofa', w:228, d:95, h:83, m:{t:'fabric',c:'#8a8f98'}, k:'sofa'},
-  {g:'Sitzen', n:'POÄNG Sessel', w:68, d:82, h:100, m:{t:'fabric',c:'#c9bfae'}, k:'sofa'},
-  {g:'Sitzen', n:'ADDE Stuhl', w:39, d:47, h:77, m:{t:'plain',c:'#f4f2ec'}, k:'chair'},
-  {g:'Schränke', n:'PAX Kleiderschrank 100', w:100, d:58, h:236, m:{t:'plain',c:'#f4f2ec'}, k:'cabinet'},
-  {g:'Schränke', n:'MALM Kommode 3 Schubl.', w:80, d:48, h:78, m:{t:'wood',c:'#c09060'}, k:'cabinet'},
-  {g:'Schränke', n:'BESTÅ TV-Bank', w:180, d:42, h:38, m:{t:'plain',c:'#f4f2ec'}, k:'cabinet'},
-  {g:'Sonstiges', n:'Küchenzeile 240', w:240, d:60, h:90, m:{t:'plain',c:'#dcd6cb'}, k:'cabinet'},
-  {g:'Sonstiges', n:'Kühlschrank', w:60, d:65, h:185, m:{t:'metal',c:'#c9ccd0'}, k:'box'},
-  {g:'Sonstiges', n:'Teppich 160×230', w:160, d:230, h:1, m:{t:'fabric',c:'#c9bfae'}, k:'rug'},
-  {g:'Sonstiges', n:'Zimmerpflanze', w:45, d:45, h:150, m:{t:'plain',c:'#4f7a52'}, k:'plant'},
+  // Schreibtische
+  {g:'Schreibtische', n:'MICKE Schreibtisch 73', w:73, d:50, h:75, m:W_, k:'table'},
+  {g:'Schreibtische', n:'MICKE Schreibtisch 105', w:105, d:50, h:75, m:W_, k:'desk'},
+  {g:'Schreibtische', n:'MICKE Schreibtisch 142', w:142, d:50, h:75, m:W_, k:'desk'},
+  {g:'Schreibtische', n:'ALEX Schreibtisch 100', w:100, d:48, h:76, m:W_, k:'desk'},
+  {g:'Schreibtische', n:'ALEX Schreibtisch 132', w:132, d:58, h:76, m:W_, k:'desk'},
+  {g:'Schreibtische', n:'LAGKAPTEN Schreibtisch 120', w:120, d:60, h:74, m:W_, k:'table'},
+  {g:'Schreibtische', n:'LAGKAPTEN/ALEX 140', w:140, d:60, h:73, m:OAK, k:'desk'},
+  {g:'Schreibtische', n:'BEKANT Schreibtisch 160', w:160, d:80, h:75, m:W_, k:'table'},
+  {g:'Schreibtische', n:'Gaming-Tisch 160', w:160, d:80, h:75, m:BLK, k:'table'},
+  // Bürostühle
+  {g:'Bürostühle', n:'MARKUS Bürostuhl', w:62, d:60, h:129, m:{t:'fabric', c:'#3b3f45'}, k:'ochair'},
+  {g:'Bürostühle', n:'FLINTAN Bürostuhl', w:68, d:68, h:97, m:{t:'fabric', c:'#2c2d30'}, k:'ochair'},
+  {g:'Bürostühle', n:'Gaming-Stuhl', w:70, d:70, h:130, m:{t:'fabric', c:'#2c2d30'}, k:'ochair'},
+  // Betten
+  {g:'Betten', n:'NEIDEN Bett 90×200', w:97, d:206, h:38, m:{t:'wood', c:'#d9b98a'}, k:'bed'},
+  {g:'Betten', n:'MALM Bett 90×200', w:97, d:209, h:38, m:W_, k:'bed'},
+  {g:'Betten', n:'MALM Bett 140×200', w:156, d:209, h:38, m:W_, k:'bed'},
+  {g:'Betten', n:'MALM Bett 160×200', w:176, d:209, h:38, m:OAK, k:'bed'},
+  {g:'Betten', n:'MALM Bett 180×200', w:196, d:209, h:38, m:OAK, k:'bed'},
+  {g:'Betten', n:'HEMNES Bett 140×200', w:154, d:211, h:66, m:W_, k:'bed'},
+  {g:'Betten', n:'SLATTUM Polsterbett 140', w:145, d:206, h:85, m:{t:'fabric', c:'#8a8f98'}, k:'bed'},
+  {g:'Betten', n:'KLEPPSTAD Bett 160×200', w:168, d:206, h:96, m:W_, k:'bed'},
+  // Sofas
+  {g:'Sofas', n:'KLIPPAN 2er-Sofa', w:180, d:88, h:66, m:{t:'fabric', c:'#4b5d6b'}, k:'sofa'},
+  {g:'Sofas', n:'GLOSTAD 2er-Sofa', w:171, d:80, h:76, m:{t:'fabric', c:'#8a8f98'}, k:'sofa'},
+  {g:'Sofas', n:'EKTORP 2er-Sofa', w:179, d:88, h:88, m:{t:'fabric', c:'#e9e4da'}, k:'sofa'},
+  {g:'Sofas', n:'KIVIK 2er-Sofa', w:190, d:95, h:83, m:{t:'fabric', c:'#8a8f98'}, k:'sofa'},
+  {g:'Sofas', n:'EKTORP 3er-Sofa', w:218, d:88, h:88, m:{t:'fabric', c:'#e9e4da'}, k:'sofa'},
+  {g:'Sofas', n:'KIVIK 3er-Sofa', w:228, d:95, h:83, m:{t:'fabric', c:'#8a8f98'}, k:'sofa'},
+  {g:'Sofas', n:'FRIHETEN Ecksofa', w:230, d:151, h:66, m:{t:'fabric', c:'#3b3f45'}, k:'sofa'},
+  // Sessel
+  {g:'Sessel', n:'POÄNG Sessel', w:68, d:82, h:100, m:{t:'fabric', c:'#c9bfae'}, k:'sofa'},
+  {g:'Sessel', n:'KOARP Sessel', w:73, d:81, h:86, m:{t:'fabric', c:'#7a8b6f'}, k:'sofa'},
+  {g:'Sessel', n:'STRANDMON Ohrensessel', w:82, d:96, h:101, m:{t:'fabric', c:'#4b5d6b'}, k:'sofa'},
+  {g:'Sessel', n:'EKTORP Sessel', w:104, d:88, h:88, m:{t:'fabric', c:'#e9e4da'}, k:'sofa'},
+  // Kleiderschränke
+  {g:'Kleiderschränke', n:'PAX Kleiderschrank 50', w:50, d:58, h:201, m:W_, k:'cabinet'},
+  {g:'Kleiderschränke', n:'RAKKESTAD Kleiderschrank', w:79, d:55, h:176, m:BLK, k:'cabinet'},
+  {g:'Kleiderschränke', n:'PAX Kleiderschrank 100', w:100, d:58, h:236, m:W_, k:'cabinet'},
+  {g:'Kleiderschränke', n:'BRIMNES Kleiderschrank', w:117, d:50, h:190, m:W_, k:'cabinet'},
+  {g:'Kleiderschränke', n:'KLEPPSTAD Kleiderschrank', w:117, d:55, h:176, m:W_, k:'cabinet'},
+  {g:'Kleiderschränke', n:'PAX Schiebetürschrank 150', w:150, d:66, h:236, m:OAK, k:'cabinet'},
+  {g:'Kleiderschränke', n:'PAX Kleiderschrank 200', w:200, d:58, h:236, m:W_, k:'cabinet'},
+  {g:'Kleiderschränke', n:'PAX Schiebetürschrank 250', w:250, d:66, h:236, m:OAK, k:'cabinet'},
+  // Regale
+  {g:'Regale', n:'KALLAX Regal 1×4', w:42, d:39, h:147, m:W_, k:'shelf'},
+  {g:'Regale', n:'BILLY Bücherregal 40', w:40, d:28, h:202, m:W_, k:'shelf'},
+  {g:'Regale', n:'KALLAX Regal 2×2', w:77, d:39, h:77, m:W_, k:'shelf'},
+  {g:'Regale', n:'KALLAX Regal 2×4', w:77, d:39, h:147, m:W_, k:'shelf'},
+  {g:'Regale', n:'BILLY Bücherregal 80', w:80, d:28, h:202, m:W_, k:'shelf'},
+  {g:'Regale', n:'IVAR Regal', w:89, d:30, h:179, m:{t:'wood', c:'#d9b98a'}, k:'shelf'},
+  {g:'Regale', n:'HEMNES Bücherregal', w:90, d:37, h:197, m:W_, k:'shelf'},
+  {g:'Regale', n:'KALLAX Regal 4×4', w:147, d:39, h:147, m:W_, k:'shelf'},
+  {g:'Regale', n:'LACK Wandregal 110', w:110, d:26, h:5, e:150, m:W_, k:'box'},
+  // Kommoden
+  {g:'Kommoden', n:'ALEX Schubladenelement', w:36, d:58, h:70, m:W_, k:'cabinet'},
+  {g:'Kommoden', n:'KULLEN Kommode 3 Schubl.', w:70, d:40, h:72, m:BLK, k:'cabinet'},
+  {g:'Kommoden', n:'BRIMNES Kommode 3 Schubl.', w:78, d:41, h:95, m:W_, k:'cabinet'},
+  {g:'Kommoden', n:'MALM Kommode 3 Schubl.', w:80, d:48, h:78, m:OAK, k:'cabinet'},
+  {g:'Kommoden', n:'MALM Kommode 4 Schubl.', w:80, d:48, h:100, m:W_, k:'cabinet'},
+  {g:'Kommoden', n:'HEMNES Kommode 3 Schubl.', w:108, d:50, h:96, m:W_, k:'cabinet'},
+  {g:'Kommoden', n:'MALM Kommode 6 Schubl.', w:160, d:48, h:78, m:W_, k:'cabinet'},
+  {g:'Kommoden', n:'HEMNES Kommode 8 Schubl.', w:160, d:50, h:96, m:W_, k:'cabinet'},
+  // Nachttische
+  {g:'Nachttische', n:'KULLEN Nachttisch', w:35, d:40, h:49, m:BLK, k:'cabinet'},
+  {g:'Nachttische', n:'MALM Nachttisch', w:40, d:48, h:55, m:W_, k:'cabinet'},
+  {g:'Nachttische', n:'HEMNES Nachttisch', w:46, d:35, h:70, m:W_, k:'cabinet'},
+  // Esstische
+  {g:'Esstische', n:'EKEDALEN Esstisch 120', w:120, d:80, h:75, m:OAK, k:'table'},
+  {g:'Esstische', n:'LANEBERG Esstisch 130', w:130, d:80, h:75, m:W_, k:'table'},
+  {g:'Esstische', n:'LISABO Esstisch 140', w:140, d:78, h:74, m:OAK, k:'table'},
+  {g:'Esstische', n:'MÖRBYLÅNGA Esstisch 220', w:220, d:100, h:74, m:{t:'wood', c:'#6e4b33'}, k:'table'},
+  // Couchtische
+  {g:'Couchtische', n:'LACK Beistelltisch', w:55, d:55, h:45, m:BLK, k:'table'},
+  {g:'Couchtische', n:'LACK Couchtisch', w:90, d:55, h:45, m:BLK, k:'table'},
+  {g:'Couchtische', n:'HEMNES Couchtisch', w:90, d:90, h:46, m:W_, k:'table'},
+  {g:'Couchtische', n:'LISTERBY Couchtisch', w:140, d:60, h:45, m:OAK, k:'table'},
+  // Stühle
+  {g:'Stühle', n:'ADDE Stuhl', w:39, d:47, h:77, m:W_, k:'chair'},
+  {g:'Stühle', n:'STEFAN Stuhl', w:42, d:49, h:90, m:{t:'wood', c:'#6e4b33'}, k:'chair'},
+  {g:'Stühle', n:'TEODORES Stuhl', w:46, d:54, h:80, m:W_, k:'chair'},
+  {g:'Stühle', n:'LISABO Stuhl', w:50, d:51, h:76, m:OAK, k:'chair'},
+  // TV-Bänke
+  {g:'TV-Bänke', n:'BESTÅ TV-Bank 120', w:120, d:42, h:38, m:W_, k:'cabinet'},
+  {g:'TV-Bänke', n:'HEMNES TV-Bank', w:148, d:47, h:57, m:W_, k:'cabinet'},
+  {g:'TV-Bänke', n:'LACK TV-Bank', w:160, d:35, h:35, m:BLK, k:'cabinet'},
+  {g:'TV-Bänke', n:'BESTÅ TV-Bank 180', w:180, d:42, h:38, m:W_, k:'cabinet'},
+  {g:'TV-Bänke', n:'BRIMNES TV-Bank', w:180, d:41, h:53, m:W_, k:'cabinet'},
+  // Fernseher
+  {g:'Fernseher', n:'Fernseher 43"', w:97, d:20, h:62, m:BLK, k:'tv'},
+  {g:'Fernseher', n:'Fernseher 55"', w:123, d:25, h:77, m:BLK, k:'tv'},
+  {g:'Fernseher', n:'Fernseher 65"', w:145, d:28, h:89, m:BLK, k:'tv'},
+  // Teppiche
+  {g:'Teppiche', n:'Teppich rund 120', w:120, d:120, h:1, m:{t:'fabric', c:'#c9bfae'}, k:'rug'},
+  {g:'Teppiche', n:'Teppich 133×195', w:133, d:195, h:1, m:{t:'fabric', c:'#c9bfae'}, k:'rug'},
+  {g:'Teppiche', n:'Teppich 160×230', w:160, d:230, h:1, m:{t:'fabric', c:'#b9a88f'}, k:'rug'},
+  {g:'Teppiche', n:'Teppich 200×300', w:200, d:300, h:1, m:{t:'fabric', c:'#8a8f98'}, k:'rug'},
+  // Pflanzen & Lampen
+  {g:'Pflanzen', n:'Zimmerpflanze klein', w:30, d:30, h:60, m:{t:'plain', c:'#4f7a52'}, k:'plant'},
+  {g:'Pflanzen', n:'Monstera', w:60, d:60, h:120, m:{t:'plain', c:'#3f6b43'}, k:'plant'},
+  {g:'Pflanzen', n:'Zimmerpflanze groß', w:45, d:45, h:150, m:{t:'plain', c:'#4f7a52'}, k:'plant'},
+  {g:'Lampen', n:'Stehlampe', w:30, d:30, h:160, m:{t:'plain', c:'#f2efe6'}, k:'lamp'},
+  {g:'Lampen', n:'Stehlampe groß', w:40, d:40, h:180, m:{t:'plain', c:'#2b2b2b'}, k:'lamp'},
+  // Küche & Sonstiges
+  {g:'Küche', n:'Kühlschrank', w:60, d:65, h:185, m:{t:'metal', c:'#c9ccd0'}, k:'box'},
+  {g:'Küche', n:'Spülmaschine', w:60, d:60, h:85, m:{t:'metal', c:'#c9ccd0'}, k:'box'},
+  {g:'Küche', n:'Küchenzeile 240', w:240, d:60, h:90, m:{t:'plain', c:'#dcd6cb'}, k:'cabinet'},
+  {g:'Sonstiges', n:'Waschmaschine', w:60, d:60, h:85, m:{t:'plain', c:'#f4f4f4'}, k:'box'},
+  {g:'Sonstiges', n:'Heizkörper 100', w:100, d:10, h:60, e:15, m:{t:'plain', c:'#f4f4f4'}, k:'box'},
 ];
-const KINDS = {box:'Box', table:'Tisch', bed:'Bett', sofa:'Sofa/Sessel', chair:'Stuhl', shelf:'Regal', cabinet:'Schrank', plant:'Pflanze', rug:'Teppich'};
+const KINDS = {box:'Box', table:'Tisch', desk:'Schreibtisch', bed:'Bett', sofa:'Sofa/Sessel', chair:'Stuhl', ochair:'Bürostuhl', shelf:'Regal', cabinet:'Schrank', tv:'Fernseher', lamp:'Lampe', plant:'Pflanze', rug:'Teppich'};
 
 function toast(m) { const t = $('#toast'); t.textContent = m; t.style.opacity = 1; clearTimeout(t._t); t._t = setTimeout(() => t.style.opacity = 0, 2600); }
 
@@ -1021,10 +1122,10 @@ document.addEventListener('click', e => {
     } break;
     case 'delVtx': if (o && selVtx && sel.t === 'room') { const kids = S.items.filter(it => roomAt(it.x, it.y) === o); removeVertex(o, selVtx.i); selVtx = null; fixOrientation(o); kids.forEach(it => fitInRoom(it, o, false)); changed(true); } break;
     case 'arStart': if (sel && sel.t === 'room') startAR(sel.id); else startAR(null); break;
-    case 'arUndo': case 'arAdd': case 'arNext': case 'arMethod': case 'arKind': case 'arFinish': case 'arCancel': arAct(act, b); break;
+    case 'arUndo': case 'arAdd': case 'arNext': case 'arMethod': case 'arToFurn': case 'arDetect': case 'arFurnDel': case 'arKind': case 'arFinish': case 'arCancel': arAct(act, b); break;
     case 'arApply': arApply(); break;
     case 'arRetry': closeModal(); startAR(arResult?.rid); break;
-    case 'vtMode': case 'vtReset': case 'vtUndo': case 'vtPreset': case 'pipTo': vtAct(act, b); break;
+    case 'vtMode': case 'vtReset': case 'vtUndo': case 'vtPreset': case 'pipTo': case 'detApply': vtAct(act, b); break;
     case 'data': openData(); break;
     case 'copy': navigator.clipboard.writeText($('#json').value).then(() => toast('Kopiert'), () => { $('#json').select(); toast('Bitte manuell kopieren'); }); break;
     case 'import': try { const d = JSON.parse($('#json').value); if (!d.rooms) throw 0; S = migrate(d); sel = null; save(); closeModal(); fit(); changed(true); toast('Importiert'); } catch (er) { toast('Ungültige Daten'); } break;
@@ -1032,7 +1133,7 @@ document.addEventListener('click', e => {
   }
 });
 function addItem(c) {
-  const it = {id:uid(), n:c.n, w:c.w, d:c.d, h:c.h, mat:c.mat, k:c.k || 'box', link:c.link || '', rot:0, e:0, x:0, y:0};
+  const it = {id:uid(), n:c.n, w:c.w, d:c.d, h:c.h, mat:c.mat, k:c.k || 'box', link:c.link || '', rot:0, e:c.e || 0, x:0, y:0};
   const r = (sel && sel.t === 'room' && find('room', sel.id)) || roomAt(V.cx, V.cy) || S.rooms[0];
   if (r) { const lp = labelPoint(r); it.x = snap(lp.x); it.y = snap(lp.y); fitInRoom(it, r, false); } else { it.x = snap(V.cx); it.y = snap(V.cy); }
   S.items.push(it); sel = {t:'item', id:it.id}; changed(true); toast(`${it.n} platziert`);
@@ -1102,7 +1203,7 @@ function openViewer(i) {
   openModal(`${find('room', m.room)?.name || ''} · ${i + 1} / ${list.length}`, `
     <div class="viewer" id="vw">${m.type === 'vid' ? `<video data-mid="${m.id}" controls playsinline></video>` : `<img data-mid="${m.id}" alt=""><svg id="vsv" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"></svg>`}
       ${i > 0 ? `<button class="nav l" data-act="vnav" data-i="${i - 1}">‹</button>` : ''}${i < list.length - 1 ? `<button class="nav r" data-act="vnav" data-i="${i + 1}">›</button>` : ''}</div>
-    ${m.type === 'img' && !m.raw ? `<div class="vtools"><button data-act="vtMode" data-mode="pip">🎨 Farbe aufnehmen</button><button data-act="vtMode" data-mode="measure">📏 Im Foto messen</button></div><div id="vtool"></div>` : ''}
+    ${m.type === 'img' && !m.raw ? `<div class="vtools"><button data-act="vtMode" data-mode="pip">🎨 Farbe</button><button data-act="vtMode" data-mode="measure">📏 Messen</button><button data-act="vtMode" data-mode="det">🛋 Möbel erkennen</button></div><div id="vtool"></div>` : ''}
     <div class="g2"><label>Notiz<input id="mcap" placeholder="z. B. Blick zum Fenster" value="${esc(m.cap || '')}"></label><label>Raum<select id="mroom">${S.rooms.map(r => `<option value="${r.id}" ${r.id === m.room ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label></div>
     <div class="actions">
       <button data-act="pin" data-id="${m.id}">📍 ${m.pin ? 'Standort ändern' : 'Standort im Plan setzen'}</button>
@@ -1318,6 +1419,98 @@ function applyRecon(r, j, replaceItems) {
   kids.forEach(it => fitInRoom(it, r, false));
   return stats;
 }
+/* ================= Möbelerkennung auf dem Gerät (OWL-ViT über Transformers.js, ohne Claude) ================= */
+const DETECT = [
+  {k:'desk', de:'Schreibtisch', p:['a desk', 'a computer desk'], g:'Schreibtische'},
+  {k:'office', de:'Bürostuhl', p:['an office chair', 'a gaming chair'], g:'Bürostühle'},
+  {k:'bed', de:'Bett', p:['a bed'], g:'Betten'},
+  {k:'sofa', de:'Sofa', p:['a sofa', 'a couch'], g:'Sofas'},
+  {k:'armchair', de:'Sessel', p:['an armchair'], g:'Sessel'},
+  {k:'wardrobe', de:'Kleiderschrank', p:['a wardrobe', 'a closet'], g:'Kleiderschränke'},
+  {k:'shelf', de:'Regal', p:['a bookshelf', 'a shelving unit'], g:'Regale'},
+  {k:'dresser', de:'Kommode', p:['a chest of drawers', 'a dresser'], g:'Kommoden'},
+  {k:'night', de:'Nachttisch', p:['a nightstand'], g:'Nachttische'},
+  {k:'dining', de:'Esstisch', p:['a dining table'], g:'Esstische'},
+  {k:'coffee', de:'Couchtisch', p:['a coffee table'], g:'Couchtische'},
+  {k:'chair', de:'Stuhl', p:['a chair'], g:'Stühle'},
+  {k:'tvbench', de:'TV-Bank', p:['a tv stand'], g:'TV-Bänke'},
+  {k:'plant', de:'Pflanze', p:['a potted plant'], g:'Pflanzen'},
+  {k:'rug', de:'Teppich', p:['a rug'], g:'Teppiche'},
+  {k:'lamp', de:'Stehlampe', p:['a floor lamp'], g:'Lampen'},
+  {k:'fridge', de:'Kühlschrank', p:['a refrigerator'], g:'Küche', only:'Kühlschrank'},
+];
+const PROMPTS = DETECT.flatMap(c => c.p), PROMPT_CAT = Object.fromEntries(DETECT.flatMap(c => c.p.map(p => [p, c])));
+const MODEL_ID = 'Xenova/owlvit-base-patch32';
+let detPipe = null, detLoad = null, detRaw = null, detProg = null;
+function getDetector(onProg) {
+  if (detPipe) return Promise.resolve(detPipe);
+  if (onProg) (detProg ||= new Set()).add(onProg);
+  detLoad ||= (async () => {
+    const T = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2');
+    T.env.allowLocalModels = false;
+    const files = {};
+    const pipe = await T.pipeline('zero-shot-object-detection', MODEL_ID, {dtype:'q8', device:'wasm', progress_callback:p => {
+      if (p.status === 'progress' && p.total) { files[p.file] = [p.loaded, p.total]; }
+      const v = Object.values(files), L = v.reduce((a, x) => a + x[0], 0), Tt = v.reduce((a, x) => a + x[1], 0);
+      const pct = Tt ? Math.round(L / Tt * 100) : 0;
+      detProg?.forEach(f => { try { f(pct, Tt); } catch (e) {} });
+    }});
+    detRaw = T.RawImage; detPipe = pipe; return pipe;
+  })().catch(e => { detLoad = null; throw e; });
+  return detLoad;
+}
+function iou(a, b) {
+  const x0 = Math.max(a.xmin, b.xmin), y0 = Math.max(a.ymin, b.ymin), x1 = Math.min(a.xmax, b.xmax), y1 = Math.min(a.ymax, b.ymax);
+  const I = Math.max(0, x1 - x0) * Math.max(0, y1 - y0), A = (a.xmax - a.xmin)*(a.ymax - a.ymin), B = (b.xmax - b.xmin)*(b.ymax - b.ymin);
+  return I / (A + B - I || 1);
+}
+// Erkennt Möbel auf einem Canvas; Boxen normiert (0–1)
+async function runDetect(canvas, threshold = .1) {
+  const det = await getDetector();
+  const out = await det(detRaw.fromCanvas(canvas), PROMPTS, {threshold, percentage:true});
+  const res = out.map(o => ({score:o.score, cat:PROMPT_CAT[o.label], box:{xmin:clamp(o.box.xmin, 0, 1), ymin:clamp(o.box.ymin, 0, 1), xmax:clamp(o.box.xmax, 0, 1), ymax:clamp(o.box.ymax, 0, 1)}}))
+    .filter(r => r.cat && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) > .006 && (r.box.xmax - r.box.xmin)*(r.box.ymax - r.box.ymin) < .97)
+    .sort((a, b) => b.score - a.score);
+  const keep = [];
+  for (const r of res) if (!keep.some(k => iou(k.box, r.box) > .5)) keep.push(r);
+  return keep.slice(0, 15);
+}
+function catItems(cat) { return CAT.map((c, i) => ({c, i})).filter(({c}) => c.g === cat.g && (!cat.only || c.n.includes(cat.only))); }
+// ähnlichstes Katalogmöbel: nach gemessener Breite (cm), sonst ein mittleres
+function pickItem(cat, Wcm) {
+  const L = catItems(cat); if (!L.length) return null;
+  if (!(Wcm > 0)) return L[Math.floor(L.length/2)].i;
+  return L.reduce((a, b) => Math.abs(b.c.w - Wcm) < Math.abs(a.c.w - Wcm) ? b : a).i;
+}
+function canvasFrom(img, max = 768) {
+  const k = Math.min(1, max / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+  const c = document.createElement('canvas'); c.width = Math.round((img.naturalWidth || img.width)*k); c.height = Math.round((img.naturalHeight || img.height)*k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); return c;
+}
+const detUnavailable = () => inFrame ? 'Die Möbelerkennung lädt ein Modell aus dem Internet und funktioniert nur über deine eigene Webadresse (Vercel), nicht in dieser eingebetteten Ansicht.' : '';
+// Platziertes Möbel aus Kategorie + Katalogwahl + Plan-Position/Blickrichtung
+function makeItem(ci, x, y, back) {
+  const c = CAT[ci];
+  return {id:uid(), n:c.n, w:c.w, d:c.d, h:c.h, mat:{...c.m}, k:c.k, link:'', e:c.e || 0, x, y, rot:normAng(Math.round(Math.atan2(back.x, -back.y)*180/Math.PI))};
+}
+// an nahe Wand andocken, wenn Lage und Winkel passen
+function snapItemToWall(it, r) {
+  const a = it.rot*Math.PI/180, b = {x:Math.sin(a), y:-Math.cos(a)};
+  let best = null;
+  for (const e of innerEdges(r)) {
+    const t = (it.x - e.A.x)*e.dx + (it.y - e.A.y)*e.dy; if (t < -20 || t > e.L + 20) continue;
+    const dot = -(b.x*e.nx + b.y*e.ny); if (dot < Math.cos(35*Math.PI/180)) continue;
+    const s = (it.x - e.A.x)*e.nx + (it.y - e.A.y)*e.ny - it.d/2;
+    if (s < 70 && (!best || s < best.s)) best = {...e, s};
+  }
+  if (best) {
+    it.rot = normAng(Math.round(Math.atan2(-best.nx, best.ny)*180/Math.PI));
+    const m = Math.min(...itemCorners(it).map(C => (C.x - best.A.x)*best.nx + (C.y - best.A.y)*best.ny));
+    it.x -= best.nx*m; it.y -= best.ny*m;
+  }
+  fitInRoom(it, r, true);
+}
+
 /* ================= AR-Vermessung (WebXR, läuft komplett auf dem Handy) ================= */
 let arOK = false, ar = null, arResult = null;
 const inFrame = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
@@ -1332,7 +1525,7 @@ async function startAR(rid) {
   if (!arOK) return arUnsupported();
   const root = $('#ar'); root.hidden = false;
   let session;
-  try { session = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay'], domOverlay:{root}}); }
+  try { session = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['hit-test'], optionalFeatures:['dom-overlay', 'camera-access'], domOverlay:{root}}); }
   catch (e) { root.hidden = true; return toast('AR konnte nicht gestartet werden: ' + (e.message || e)); }
   const ren = new THREE.WebGLRenderer({antialias:true, alpha:true});
   ren.setPixelRatio(devicePixelRatio); ren.setSize(innerWidth, innerHeight); ren.xr.enabled = true; ren.xr.setReferenceSpaceType('local');
@@ -1343,7 +1536,7 @@ async function startAR(rid) {
   const marks = new THREE.Group(); scene.add(marks);
   const live = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({color:0xffd166}));
   live.visible = false; scene.add(live);
-  ar = {session, ren, scene, reticle, marks, live, cur:null, real:false, method:'corner', corners:[], walls:[], wpend:null, ops:[], pending:null, kind:'window', phase:'corners', floorY:null, done:false, rid};
+  ar = {session, ren, scene, reticle, marks, live, cur:null, real:false, method:'corner', corners:[], walls:[], wpend:null, ops:[], pending:null, kind:'window', phase:'corners', floorY:null, done:false, rid, furn:[], detBusy:false, captureCb:null, camOK:null, detMsg:''};
   await ren.xr.setSession(session);
   const viewer = await session.requestReferenceSpace('viewer');
   const hts = await session.requestHitTestSource({space:viewer});
@@ -1377,8 +1570,78 @@ async function startAR(rid) {
       $('#arDist').textContent = Math.hypot(pt.x - last.x, pt.z - last.z).toFixed(2).replace('.', ',') + ' m'; $('#arDist').hidden = false;
     } else { live.visible = false; $('#arDist').hidden = true; }
     ren.render(scene, cam);
+    const vp = frame.getViewerPose(ref), view = vp?.views?.[0];
+    if (ar.camOK == null && view) { ar.camOK = !!view.camera; }
+    if (ar.captureCb && view?.camera) { try { const shot = arGrab(ren, view); const cb = ar.captureCb; ar.captureCb = null; cb(shot); } catch (e) { const cb = ar.captureCb; ar.captureCb = null; cb(null); } }
   });
   arUI();
+}
+// Kamerabild der aktuellen AR-Ansicht auslesen (WebXR Raw Camera Access) + Matrizen für die Projektion
+let blit = null;
+function arGrab(ren, view) {
+  const gl = ren.getContext(), bind = ren.xr.getBinding(), tex = bind.getCameraImage(view.camera);
+  const cw = view.camera.width, ch = view.camera.height, W = Math.min(768, cw), H = Math.round(ch * W / cw);
+  if (!blit) {
+    const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); return o; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 p; out vec2 uv; void main(){ uv = p*.5+.5; gl_Position = vec4(p,0.,1.); }'));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, '#version 300 es\nprecision mediump float; in vec2 uv; uniform sampler2D t; out vec4 o; void main(){ o = texture(t, uv); }'));
+    gl.linkProgram(prog);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    blit = {prog, buf, loc:gl.getAttribLocation(prog, 'p'), ut:gl.getUniformLocation(prog, 't'), fbo:gl.createFramebuffer(), tex:gl.createTexture(), W:0, H:0};
+  }
+  const prevFb = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+  if (blit.W !== W || blit.H !== H) { gl.bindTexture(gl.TEXTURE_2D, blit.tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); blit.W = W; blit.H = H; }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, blit.fbo); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, blit.tex, 0);
+  gl.bindVertexArray(null); gl.viewport(0, 0, W, H);
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST); gl.disable(gl.CULL_FACE); gl.disable(gl.STENCIL_TEST);
+  gl.useProgram(blit.prog); gl.bindBuffer(gl.ARRAY_BUFFER, blit.buf); gl.enableVertexAttribArray(blit.loc); gl.vertexAttribPointer(blit.loc, 2, gl.FLOAT, false, 0, 0);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(blit.ut, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  const px = new Uint8Array(W*H*4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.disableVertexAttribArray(blit.loc); gl.bindFramebuffer(gl.FRAMEBUFFER, prevFb);
+  ren.resetState();
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const id = new ImageData(W, H), row = W*4;
+  for (let y = 0; y < H; y++) id.data.set(px.subarray((H - 1 - y)*row, (H - y)*row), y*row);
+  c.getContext('2d').putImageData(id, 0, 0);
+  return {canvas:c, proj:Array.from(view.projectionMatrix), xf:Array.from(view.transform.matrix)};
+}
+function shotFloor(shot, u, v, fy) {
+  const P = new THREE.Matrix4().fromArray(shot.proj).invert(), X = new THREE.Matrix4().fromArray(shot.xf);
+  const dir = new THREE.Vector3(u*2 - 1, 1 - v*2, .5).applyMatrix4(P).normalize().transformDirection(X), o = new THREE.Vector3().setFromMatrixPosition(X);
+  if (dir.y > -.02) return null;
+  const s = (fy - o.y) / dir.y; if (s <= 0 || s > 12) return null;
+  return o.addScaledVector(dir, s);
+}
+async function arDetect() {
+  if (!ar || ar.detBusy) return;
+  const why = detUnavailable(); if (why) return toast(why);
+  if (ar.camOK === false) return toast('Dein Browser gibt das Kamerabild in AR nicht frei – nutze danach „🛋 Möbel erkennen“ in der Foto-Ansicht.');
+  const st = ar; st.detBusy = true; st.detMsg = 'Bild wird aufgenommen …'; arUI();
+  try {
+    const shot = await new Promise(res => { st.captureCb = res; setTimeout(() => { if (st.captureCb) { st.captureCb = null; res(null); } }, 3000); });
+    if (!shot) throw new Error('Kein Kamerabild');
+    if (!detPipe) { st.detMsg = 'Erkennungsmodell wird geladen …'; arUI(); }
+    await getDetector(pct => { if (st === ar && st.detBusy && !detPipe) { st.detMsg = `Erkennungsmodell wird geladen … ${pct} %`; arUI(); } });
+    st.detMsg = 'Möbel werden erkannt …'; arUI();
+    const dets = await runDetect(shot.canvas);
+    const X = new THREE.Matrix4().fromArray(shot.xf), camO = new THREE.Vector3().setFromMatrixPosition(X);
+    let n = 0;
+    for (const d of dets) {
+      const fy = st.floorY, b = d.box, fl = shotFloor(shot, b.xmin, b.ymax, fy), fr = shotFloor(shot, b.xmax, b.ymax, fy), fc = shotFloor(shot, (b.xmin + b.xmax)/2, b.ymax, fy);
+      if (!fc) continue;
+      const W = fl && fr ? Math.hypot(fl.x - fr.x, fl.z - fr.z)*100 : 0;
+      let bx = fc.x - camO.x, bz = fc.z - camO.z; const bl = Math.hypot(bx, bz) || 1; bx /= bl; bz /= bl;
+      const ci = pickItem(d.cat, W); if (ci == null) continue;
+      const it = CAT[ci], cx = fc.x + bx*it.d/200, cz = fc.z + bz*it.d/200;
+      const dup = st.furn.findIndex(f => f.cat.k === d.cat.k && Math.hypot(f.x - cx, f.z - cz) < .6);
+      const entry = {cat:d.cat, ci, x:cx, z:cz, bx, bz, W, score:d.score};
+      if (dup >= 0) { if (st.furn[dup].score <= d.score) st.furn[dup] = entry; } else { st.furn.push(entry); n++; }
+    }
+    st.detMsg = dets.length ? `${n} neu erkannt.` : 'Nichts erkannt – näher ran oder anderen Blickwinkel probieren.';
+  } catch (e) { st.detMsg = 'Erkennung fehlgeschlagen: ' + (e.message || e); }
+  st.detBusy = false; if (st === ar) { arRedraw(); arUI(); }
 }
 function lineX(p1, p2, q1, q2) {
   const d1 = {x:p2.x - p1.x, z:p2.z - p1.z}, d2 = {x:q2.x - q1.x, z:q2.z - q1.z}, cr = d1.x*d2.z - d1.z*d2.x;
@@ -1407,6 +1670,11 @@ function arRedraw() {
   const col = {window:0x4a8fc4, door:0xe0782f, open:0xd6b44a};
   for (const o of ar.ops) { g.add(arDot(V3(o.a), col[o.kind]), arDot(V3(o.b), col[o.kind])); line([V3(o.a), V3(o.b)], col[o.kind]); }
   if (ar.pending) g.add(arDot(V3(ar.pending), col[ar.kind]));
+  for (const f of ar.furn) {
+    const c = CAT[f.ci], w = c.w/100, h = Math.max(.02, c.h/100), d = c.d/100;
+    const e = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, d)), new THREE.LineBasicMaterial({color:0xffd166}));
+    e.position.set(f.x, y + h/2, f.z); e.rotation.y = Math.atan2(-f.bx, -f.bz); g.add(e);
+  }
 }
 function arUI() {
   if (!ar) return;
@@ -1423,7 +1691,12 @@ function arUI() {
   } else {
     msg ||= `${KINDS_OPEN[ar.kind]}: ${ar.pending ? 'jetzt den RECHTEN Rand am Boden markieren.' : 'am Boden direkt unter dem LINKEN Rand einen Punkt setzen.'} (${ar.ops.length} markiert)`;
     btns = `<div class="seg arseg">${Object.entries(KINDS_OPEN).map(([k, v]) => `<button data-act="arKind" data-k="${k}" class="${ar.kind === k ? 'on' : ''}">${v}</button>`).join('')}</div>
-      <button data-act="arUndo">↶</button><button class="pri big" data-act="arAdd">＋ Punkt</button><button data-act="arFinish">Fertig ✓</button>`;
+      <button data-act="arUndo">↶</button><button class="pri big" data-act="arAdd">＋ Punkt</button><button data-act="arToFurn" ${ar.pending ? 'disabled' : ''}>Möbel ›</button><button data-act="arFinish" ${ar.pending ? 'disabled' : ''}>Fertig ✓</button>`;
+  }
+  if (ar.phase === 'furn') {
+    msg = ar.detBusy ? ar.detMsg : `Richte die Kamera auf Möbel (ganz im Bild, inkl. Unterkante) und tippe „Erkennen“. ${ar.detMsg || ''}`;
+    btns = `<div class="arlist">${ar.furn.map((f, i) => `<div><span>${f.cat.de} → ${esc(CAT[f.ci].n)}${f.W ? ` · ~${fmtM(f.W)} m` : ''}</span><button data-act="arFurnDel" data-i="${i}">✕</button></div>`).join('')}</div>
+      <button data-act="arUndo" ${ar.furn.length ? '' : 'disabled'}>↶</button><button class="pri big" data-act="arDetect" ${ar.detBusy ? 'disabled' : ''}>🔍 Erkennen</button><button data-act="arFinish" ${ar.detBusy ? 'disabled' : ''}>Fertig ✓</button>`;
   }
   $('#arMsg').textContent = msg; $('#arBtns').innerHTML = btns;
 }
@@ -1442,7 +1715,8 @@ function arAdd() {
 function arAct(act, b) {
   if (!ar) return;
   if (act === 'arUndo') {
-    if (ar.phase === 'corners') { if (ar.method === 'corner') ar.corners.pop(); else if (ar.wpend) ar.wpend = null; else ar.walls.pop(); }
+    if (ar.phase === 'furn') { if (ar.furn.length) ar.furn.pop(); else ar.phase = 'open'; }
+    else if (ar.phase === 'corners') { if (ar.method === 'corner') ar.corners.pop(); else if (ar.wpend) ar.wpend = null; else ar.walls.pop(); }
     else if (ar.pending) ar.pending = null; else if (ar.ops.length) ar.ops.pop();
     else { ar.phase = 'corners'; if (ar.method === 'wall') ar.corners = []; }
   }
@@ -1457,6 +1731,9 @@ function arAct(act, b) {
     ar.phase = 'open';
   }
   if (act === 'arKind') { ar.kind = b.dataset.k; ar.pending = null; }
+  if (act === 'arToFurn') { ar.phase = 'furn'; ar.detMsg = ''; if (!detUnavailable() && ar.camOK !== false) getDetector(pct => { if (ar && ar.phase === 'furn' && !ar.detBusy && !detPipe) { ar.detMsg = `(Modell lädt: ${pct} %)`; arUI(); } }).then(() => { if (ar && !ar.detBusy) { ar.detMsg = '(Modell bereit)'; arUI(); } }, () => {}); }
+  if (act === 'arDetect') return arDetect();
+  if (act === 'arFurnDel') ar.furn.splice(+b.dataset.i, 1);
   if (act === 'arFinish') { ar.done = true; return ar.session.end(); }
   if (act === 'arCancel') { ar.done = false; return ar.session.end(); }
   arRedraw(); arUI();
@@ -1473,7 +1750,8 @@ function arToRoom(st) {
   const P = st.corners.map(v => ({x:v.x, z:v.z}));
   const a = Math.atan2(P[1].z - P[0].z, P[1].x - P[0].x), c = Math.cos(-a), s = Math.sin(-a);
   const tf = q => ({x:((q.x - P[0].x)*c - (q.z - P[0].z)*s)*100, y:((q.x - P[0].x)*s + (q.z - P[0].z)*c)*100});
-  return {pts:P.map(tf), ops:st.ops.map(o => ({kind:o.kind, a:tf(o.a), b:tf(o.b)}))};
+  return {pts:P.map(tf), ops:st.ops.map(o => ({kind:o.kind, a:tf(o.a), b:tf(o.b)})),
+    furn:st.furn.map(f => ({ci:f.ci, p:tf(f), b:{x:f.bx*c - f.bz*s, y:f.bx*s + f.bz*c}}))};
 }
 // fast-rechte Winkel exakt rechtwinklig machen, Schließfehler gleichmäßig verteilen
 function orthogonalize(P) {
@@ -1506,7 +1784,8 @@ function finalizeAR(res, ortho) {
     const shift = (p.x - outer[i].x)*dx + (p.y - outer[i].y)*dy;
     return {kind:o.kind, edge:i, offset:Math.min(ua, ub) + shift, width:Math.abs(ub - ua)};
   });
-  return {int, outer, ops};
+  const furn = (res.furn || []).map(f => ({ci:f.ci, x:f.p.x - mx, y:f.p.y - my, b:f.b}));
+  return {int, outer, ops, furn};
 }
 function arPreview(f) {
   const P = f.int, xs = P.map(p => p.x), ys = P.map(p => p.y), x0 = Math.min(...xs), y0 = Math.min(...ys), W = Math.max(...xs) - x0 || 1, H = Math.max(...ys) - y0 || 1;
@@ -1521,13 +1800,14 @@ function arPreview(f) {
     const p = f.outer[o.edge], q = f.outer[(o.edge + 1) % n], L = Math.hypot(q.x - p.x, q.y - p.y), dx = (q.x - p.x)/L, dy = (q.y - p.y)/L;
     h += `<line x1="${p.x + dx*o.offset}" y1="${p.y + dy*o.offset}" x2="${p.x + dx*(o.offset + o.width)}" y2="${p.y + dy*(o.offset + o.width)}" stroke="${col[o.kind]}" stroke-width="${3*u}"/>`;
   }
+  for (const fu of f.furn) { const c = CAT[fu.ci], a = Math.atan2(fu.b.x, -fu.b.y)*180/Math.PI; h += `<rect x="${-c.w/2}" y="${-c.d/2}" width="${c.w}" height="${c.d}" transform="translate(${fu.x} ${fu.y}) rotate(${a})" fill="#fff8" stroke="#7a3e12" stroke-width="${u}"/>`; }
   return `<svg viewBox="${vb}" style="width:100%;max-height:240px;display:block;margin:6px 0">${h}</svg>`;
 }
 function showARResult() {
   const r = arResult, room = find('room', r.rid), f = finalizeAR(r.res, r.ortho);
   const nW = f.ops.filter(o => o.kind === 'window').length, nD = f.ops.length - nW;
   const area = (Math.abs(area2(f.int))/2/10000).toFixed(1).replace('.', ',');
-  openModal('📐 Vermessung fertig', `<p><b>${f.int.length} Ecken · ${area} m²</b> · ${nW} Fenster · ${nD} Türen/Durchgänge</p>
+  openModal('📐 Vermessung fertig', `<p><b>${f.int.length} Ecken · ${area} m²</b> · ${nW} Fenster · ${nD} Türen/Durchgänge${f.furn.length ? ` · ${f.furn.length} Möbel` : ''}</p>
     ${arPreview(f)}
     <label style="display:flex;gap:8px;align-items:center;font-size:14px;color:var(--ink)"><input type="checkbox" id="arortho" ${r.ortho ? 'checked' : ''} style="width:auto"> Fast rechte Winkel begradigen (±7°)</label>
     <div class="g2"><label>Raumhöhe (cm)<input type="number" id="arh" value="${room?.h || 250}"></label><label>Übernehmen in<select id="art">${room ? `<option value="${room.id}">${esc(room.name)} (ersetzen)</option>` : ''}<option value="new">Neuer Raum</option></select></label></div>
@@ -1554,8 +1834,10 @@ function arApply() {
     n.width = Math.round(clamp(o.width, 30, L - 2*WALL)); n.offset = Math.round(clamp(o.offset, WALL, Math.max(WALL, L - WALL - n.width)));
     n.height = Math.min(n.height, h - (o.kind === 'window' ? n.sill + 5 : 2)); return n;
   });
+  const ax = r.x - Math.min(...f.outer.map(p => p.x)), ay = r.y - Math.min(...f.outer.map(p => p.y));
+  for (const fu of f.furn) { const it = makeItem(fu.ci, fu.x + ax, fu.y + ay, fu.b); snapItemToWall(it, r); S.items.push(it); }
   sel = {t:'room', id:r.id}; arResult = null; closeModal(); fit(); changed(true);
-  toast('Raum übernommen – Ecken lassen sich im Plan noch verschieben');
+  toast(f.furn.length ? `Raum mit ${f.furn.length} Möbeln übernommen – alles lässt sich noch verschieben` : 'Raum übernommen – Ecken lassen sich im Plan noch verschieben');
 }
 
 /* ================= Foto-Werkzeuge: Farb-Pipette & Messen ================= */
@@ -1570,7 +1852,7 @@ function vtInit(m) {
     vt.nw = img.naturalWidth; vt.nh = img.naturalHeight; vtDraw();
   });
   svgEl.addEventListener('pointerup', e => {
-    if (!vt.mode) return;
+    if (!vt.mode || vt.mode === 'det') return;
     const pt = svgEl.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
     const p = pt.matrixTransform(svgEl.getScreenCTM().inverse());
     if (p.x < 0 || p.y < 0 || p.x > vt.nw || p.y > vt.nh) return;
@@ -1605,14 +1887,32 @@ function vtDraw() {
     vt.lines.forEach(l => line(l, '#2f6f5e', `${vtCm(l)} cm`));
     vt.pts.forEach(q => h += `<circle cx="${q.x}" cy="${q.y}" r="${5*u}" fill="${vt.ref ? '#2f6f5e' : '#e0782f'}" stroke="#fff" stroke-width="${u}"/>`);
   }
+  if (vt.mode === 'det' && vt.dets) vt.dets.forEach((d, i) => {
+    const b = d.box, x = b.xmin*vt.nw, y = b.ymin*vt.nh, w = (b.xmax - b.xmin)*vt.nw, hh = (b.ymax - b.ymin)*vt.nh, col = d.on ? '#ffd166' : '#999';
+    h += `<rect x="${x}" y="${y}" width="${w}" height="${hh}" fill="none" stroke="${col}" stroke-width="${2.5*u}" stroke-dasharray="${d.on ? 'none' : 6*u}"/>
+      <text x="${x + 4*u}" y="${y + fs + 2*u}" font-size="${fs}" font-weight="700" fill="#fff" stroke="#000" stroke-width="${2.5*u}" paint-order="stroke">${i + 1} ${d.cat.de}</text>`;
+  });
   if (vt.mode === 'pip' && vt.pick) h += `<circle cx="${vt.pick.p.x}" cy="${vt.pick.p.y}" r="${10*u}" fill="${vt.pick.hex}" stroke="#fff" stroke-width="${3*u}"/>`;
-  s.innerHTML = h; s.style.pointerEvents = vt.mode ? 'auto' : 'none';
+  s.innerHTML = h; s.style.pointerEvents = vt.mode && vt.mode !== 'det' ? 'auto' : 'none';
 }
 function vtPanel() {
   const P = $('#vtool'); if (!P) return;
   document.querySelectorAll('[data-act=vtMode]').forEach(b => b.classList.toggle('pri', b.dataset.mode === vt.mode));
   if (!vt.mode) { P.innerHTML = ''; return; }
   const it = sel && sel.t === 'item' && find('item', sel.id);
+  if (vt.mode === 'det') {
+    const room = find('room', vt.m.room);
+    if (vt.detMsg && !vt.dets) { P.innerHTML = `<p class="hint">${esc(vt.detMsg)}</p>`; return; }
+    if (!vt.dets) { P.innerHTML = ''; return; }
+    P.innerHTML = vt.dets.length ? `<div class="detlist">${vt.dets.map((d, i) => `<div class="detrow"><label class="chk"><input type="checkbox" data-detchk="${i}" ${d.on ? 'checked' : ''}> ${i + 1} ${d.cat.de}</label>
+        <select data-detsel="${i}">${catItems(d.cat).map(({c, i:ci}) => `<option value="${ci}" ${ci === d.ci ? 'selected' : ''}>${esc(c.n)} (${c.w}×${c.d})</option>`).join('')}</select></div>`).join('')}</div>
+      <div class="actions"><button class="pri" data-act="detApply" ${vt.dets.some(d => d.on) ? '' : 'disabled'}>✓ In „${esc(room?.name || '')}“ stellen</button></div>
+      <p class="hint">${vt.m.pin ? 'Position wird über deinen Foto-Standort geschätzt (Handy auf ca. 1,40 m Höhe, gerade gehalten) – danach im Plan verschieben.' : 'Tipp: Mit „📍 Standort“ landen die Möbel an der ungefähr richtigen Stelle. Ohne Standort werden sie in die Raummitte gestellt.'} Genauer geht es mit der Kamera-Vermessung (Schritt „Möbel“).</p>`
+      : '<p class="hint">Keine Möbel erkannt. Probiere ein Foto, auf dem die Möbel ganz zu sehen sind.</p>';
+    P.querySelectorAll('[data-detchk]').forEach(el => el.addEventListener('change', () => { vt.dets[+el.dataset.detchk].on = el.checked; vtDraw(); vtPanel(); }));
+    P.querySelectorAll('[data-detsel]').forEach(el => el.addEventListener('change', () => { vt.dets[+el.dataset.detsel].ci = +el.value; }));
+    return;
+  }
   if (vt.mode === 'pip') {
     P.innerHTML = !vt.pick ? '<p class="hint">Tippe im Foto auf eine gut beleuchtete, flache Stelle (Wand, Boden, Möbel).</p>'
       : `<div class="pick"><span style="background:${vt.pick.hex}"></span><b>${vt.pick.hex}</b></div>
@@ -1628,9 +1928,49 @@ function vtPanel() {
     $('#vtref')?.addEventListener('change', () => vtPanel());
   }
 }
+async function vtDetect() {
+  const st = vt, why = detUnavailable();
+  if (why) { st.detMsg = why; vtPanel(); return; }
+  st.detMsg = detPipe ? 'Möbel werden erkannt …' : 'Erkennungsmodell wird geladen (einmalig, danach offline verfügbar) …'; vtPanel();
+  try {
+    await getDetector(pct => { if (vt === st && !detPipe) { st.detMsg = `Erkennungsmodell wird geladen … ${pct} % (einmalig)`; vtPanel(); } });
+    st.detMsg = 'Möbel werden erkannt …'; if (vt === st) vtPanel();
+    const img = $('#vw img'); if (!img?.naturalWidth) throw new Error('Foto nicht geladen');
+    const dets = await runDetect(canvasFrom(img));
+    st.dets = dets.map(d => { const g = photoGeom(st.m, d.box, img.naturalWidth, img.naturalHeight); return {...d, on:true, ci:pickItem(d.cat, g?.W), g}; });
+  } catch (e) { st.detMsg = 'Erkennung fehlgeschlagen: ' + (e.message || e) + ' – Internetverbindung beim ersten Mal nötig.'; st.dets = null; }
+  if (vt === st) { vtDraw(); vtPanel(); }
+}
+// grobe Lage aus Foto-Standort: Kamerahöhe 140 cm, waagerecht gehalten, ~70° Bildwinkel über die lange Seite
+function photoGeom(m, box, nw, nh) {
+  if (!m.pin) return null;
+  const long = 70*Math.PI/180, fx = nw >= nh ? long : 2*Math.atan(Math.tan(long/2)*nw/nh), fy = 2*Math.atan(Math.tan(fx/2)*nh/nw);
+  const ang = Math.atan((box.ymax - .5)*2*Math.tan(fy/2));
+  const D = clamp(ang > .03 ? 140 / Math.tan(ang) : 350, 60, 900);
+  const yaw = Math.atan(((box.xmin + box.xmax)/2 - .5)*2*Math.tan(fx/2)), a = m.pin.dir*Math.PI/180 + yaw;
+  const W = (box.xmax - box.xmin)*2*Math.tan(fx/2)*D;
+  return {x:m.pin.x + Math.cos(a)*D, y:m.pin.y + Math.sin(a)*D, b:{x:Math.cos(a), y:Math.sin(a)}, W};
+}
+function detApply() {
+  const r = find('room', vt.m.room); if (!r) return toast('Foto gehört zu keinem Raum');
+  reconUndo = JSON.stringify(S);
+  const lp = labelPoint(r), sel_ = vt.dets.filter(d => d.on && !d.g);
+  let n = 0, k = -(sel_.reduce((t, d) => t + CAT[d.ci].w + 30, 0) - 30)/2;
+  for (const d of vt.dets.filter(d => d.on)) {
+    const c = CAT[d.ci]; let it;
+    if (d.g) it = makeItem(d.ci, d.g.x + d.g.b.x*c.d/2, d.g.y + d.g.b.y*c.d/2, d.g.b);
+    else { it = makeItem(d.ci, lp.x + k + c.w/2, lp.y, {x:0, y:-1}); k += c.w + 30; }
+    if (!pointInPoly(r.pts, it.x, it.y)) { it.x = lp.x; it.y = lp.y; }
+    if (d.g) snapItemToWall(it, r); S.items.push(it); n++;
+  }
+  S.items.slice(-n).forEach(it => fitInRoom(it, r, false));
+  changed(); toast(`${n} Möbel in „${r.name}“ gestellt – im Plan verschieben, falls nötig`);
+  vt.dets.forEach(d => d.on = false); vtDraw(); vtPanel();
+}
 function vtAct(act, b) {
   if (!vt) return;
-  if (act === 'vtMode') { vt.mode = vt.mode === b.dataset.mode ? null : b.dataset.mode; vt.pts = []; }
+  if (act === 'vtMode') { vt.mode = vt.mode === b.dataset.mode ? null : b.dataset.mode; vt.pts = []; if (vt.mode === 'det' && !vt.dets) { vtDetect(); return; } }
+  if (act === 'detApply') return detApply();
   if (act === 'vtReset') { vt.ref = null; vt.lines = []; vt.pts = []; }
   if (act === 'vtUndo') vt.lines.pop();
   if (act === 'vtPreset') vt.refCm = +b.dataset.v;
@@ -1814,6 +2154,10 @@ function furn(it) {
     case 'cabinet': { g.add(box(w, h, d, m, 0, h/2, 0)); const n = Math.max(1, Math.round(w/.5)); for (let i = 1; i < n; i++) g.add(box(.008, h - .04, .005, dk, -w/2 + w*i/n, h/2, d/2 + .002)); for (let i = 0; i < n; i++) g.add(box(.012, .14, .02, CHROME, -w/2 + w*(i + .5)/n + (n > 1 ? .04 : 0), h*.55, d/2 + .01)); break; }
     case 'plant': { const pr = Math.min(w, d)*.32, ph = Math.min(.4, h*.3); const pot = new THREE.Mesh(new THREE.CylinderGeometry(pr, pr*.8, ph, 20), M({t:'plain', c:'#b6774f'})); pot.position.y = ph/2; g.add(pot); const lr = Math.min(w, d)/2; const leaf = new THREE.Mesh(new THREE.SphereGeometry(lr, 18, 14), M({t:'plain', c:m.c})); leaf.scale.y = Math.max(1, (h - ph)/(2*lr)); leaf.position.y = ph + (h - ph)/2; g.add(leaf); break; }
     case 'rug': g.add(box(w, .012, d, m, 0, .006, 0)); break;
+    case 'desk': { const tt = .03, lw = .045, dw = Math.min(.42, w*.36); g.add(box(w, tt, d, m, 0, h - tt/2, 0)); for (const sz of [-1, 1]) g.add(box(lw, h - tt, lw, dk, -w/2 + lw, (h - tt)/2, sz*(d/2 - lw))); g.add(box(dw, h - tt, d - .02, m, w/2 - dw/2, (h - tt)/2, 0)); for (let i = 1; i < 3; i++) g.add(box(dw - .04, .006, .005, dk, w/2 - dw/2, (h - tt)*i/3, d/2)); break; }
+    case 'ochair': { const sh = .48, r = Math.min(w, d)/2; for (let i = 0; i < 5; i++) { const a = i*Math.PI*2/5, arm = box(r, .03, .04, {t:'plain', c:'#2b2b2b'}, Math.cos(a)*r/2, .05, Math.sin(a)*r/2); arm.rotation.y = -a; g.add(arm); } g.add(box(.05, sh - .08, .05, {t:'metal', c:'#9a9ea3'}, 0, (sh - .08)/2 + .05, 0)); g.add(box(w*.8, .08, d*.75, m, 0, sh, .02)); g.add(box(w*.75, h - sh - .04, .07, m, 0, sh + (h - sh)/2, -d*.36)); break; }
+    case 'tv': { const ph = h*.82, sw = Math.min(w*.35, .4); g.add(box(sw, .02, Math.min(d, .22), {t:'plain', c:'#2b2b2b'}, 0, .01, 0)); g.add(box(.06, h - ph, .03, {t:'plain', c:'#2b2b2b'}, 0, (h - ph)/2, 0)); g.add(box(w, ph, .05, m, 0, h - ph/2, 0)); g.add(box(w - .03, ph - .03, .002, {t:'plain', c:'#111418'}, 0, h - ph/2, .026)); break; }
+    case 'lamp': { const sr = Math.min(w, d)/2; const base = new THREE.Mesh(new THREE.CylinderGeometry(sr*.7, sr*.8, .03, 24), M({t:'plain', c:'#2b2b2b'})); base.position.y = .015; g.add(base); g.add(box(.025, h - .3, .025, {t:'metal', c:'#9a9ea3'}, 0, (h - .3)/2, 0)); const shd = new THREE.Mesh(new THREE.CylinderGeometry(sr*.75, sr, .32, 24, 1, true), new THREE.MeshStandardMaterial({color:m.c, emissive:'#7a6a4a', emissiveIntensity:.5, side:THREE.DoubleSide, roughness:.9})); shd.position.y = h - .16; g.add(shd); break; }
     default: g.add(box(w, h, d, m, 0, h/2, 0));
   }
   g.position.set(it.x/100, (it.e || 0)/100, it.y/100);
